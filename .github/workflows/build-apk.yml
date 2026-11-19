@@ -24,6 +24,8 @@ jobs:
         run: |
           mkdir -p www
           cp index.html www/index.html
+          if [ -f app.js ]; then cp app.js www/app.js; fi
+          ls -la www/
 
       - name: Install Capacitor
         run: npm install
