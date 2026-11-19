@@ -1,8 +1,17 @@
 document.documentElement.setAttribute('dir','rtl');
 const firebaseConfig={apiKey:"AIzaSyBvQEV428AMGvYa6Ztkqxzm3K_iLcZAqm0",authDomain:"sarina-daftar.firebaseapp.com",databaseURL:"https://sarina-daftar-default-rtdb.firebaseio.com",projectId:"sarina-daftar",storageBucket:"sarina-daftar.firebasestorage.app",messagingSenderId:"912685467959",appId:"1:912685467959:web:bef6f3cf3ee6f8f25432b2",measurementId:"G-LGLGCM8KWX"};
-firebase.initializeApp(firebaseConfig);
-const db=firebase.database();
+var db=null;
+try{
+  if(typeof firebase!=='undefined'){
+    firebase.initializeApp(firebaseConfig);
+    db=firebase.database();
+  }
+}catch(e){console.log('firebase init',e)}
 const FAMILY_PATH='family/sarina';
+function showBootError(msg){
+  var el=document.getElementById('app');
+  if(el) el.innerHTML='<div style="padding:40px 20px;text-align:center;font-family:Tahoma,sans-serif;direction:rtl"><div style="font-size:48px">💜</div><h2 style="color:#6B3FBF">دفتر سارینا</h2><p style="color:#666">'+msg+'</p><button onclick="location.reload()" style="margin-top:16px;padding:12px 24px;background:#9B6DFF;color:#fff;border:0;border-radius:12px;font-size:16px">تلاش دوباره</button></div>';
+}
 var PRESET_POS=['کمک در کارهای خانه','مهربانی با دیگران','راستگویی','ادب و تشکر','تلاش و پشتکار'];
 var PRESET_NEG=['دروغ گفتن','بی‌احترامی','لجبازی','دعوا کردن','حرف گوش نکردن'];
 var PRESET_PARENT=['باهام قصه بخون','باهام بازی کن','منو ببر پارک','باهم فیلم ببینیم','بستنی بخوریم'];
@@ -35,8 +44,8 @@ var app=document.getElementById('app');var LS='daftar-sarina-v9';
 function applyTheme(){document.documentElement.setAttribute('data-theme',S.theme||'unicorn')}
 function lsLoad(){try{var j=JSON.parse(localStorage.getItem(LS));if(j){Object.assign(S,{name:j.name||'سارینا',tasks:j.tasks||[],days:j.days||{},rewards:j.rewards||[],claims:j.claims||[],goal:j.goal||15,parentTasks:j.parentTasks||[],parentPin:j.parentPin||'1234',posBehaviors:j.posBehaviors||[],negBehaviors:j.negBehaviors||[],streak:j.streak||0,lastActive:j.lastActive||'',theme:j.theme||'unicorn',pendingChanges:j.pendingChanges||[],healthItems:j.healthItems||[]})}applyTheme()}catch(e){}}
 function lsSave(){try{localStorage.setItem(LS,JSON.stringify(S))}catch(e){}}
-function saveProfile(){lsSave();if(db){ignoreRemote=true;db.ref(FAMILY_PATH).set(S).then(function(){ignoreRemote=false;syncStatus='online';updateSyncDot()}).catch(function(){ignoreRemote=false;syncStatus='offline';updateSyncDot()})}}
-function startFirebaseSync(){db.ref(FAMILY_PATH).on('value',function(snap){if(ignoreRemote)return;var r=snap.val();if(r){Object.assign(S,{name:r.name||S.name,tasks:r.tasks||S.tasks,days:r.days||S.days,rewards:r.rewards||S.rewards,claims:r.claims||S.claims,goal:r.goal||S.goal,parentTasks:r.parentTasks||S.parentTasks,parentPin:r.parentPin||S.parentPin,posBehaviors:r.posBehaviors||S.posBehaviors,negBehaviors:r.negBehaviors||S.negBehaviors,streak:r.streak||S.streak,lastActive:r.lastActive||S.lastActive,theme:r.theme||S.theme,pendingChanges:r.pendingChanges||S.pendingChanges||[],healthItems:r.healthItems||S.healthItems||[]});applyTheme();lsSave();
+function saveProfile(){lsSave();if(!db){syncStatus='offline';updateSyncDot();return}ignoreRemote=true;db.ref(FAMILY_PATH).set(S).then(function(){ignoreRemote=false;syncStatus='online';updateSyncDot()}).catch(function(){ignoreRemote=false;syncStatus='offline';updateSyncDot()})}
+function startFirebaseSync(){if(!db){syncStatus='offline';return}db.ref(FAMILY_PATH).on('value',function(snap){if(ignoreRemote)return;var r=snap.val();if(r){Object.assign(S,{name:r.name||S.name,tasks:r.tasks||S.tasks,days:r.days||S.days,rewards:r.rewards||S.rewards,claims:r.claims||S.claims,goal:r.goal||S.goal,parentTasks:r.parentTasks||S.parentTasks,parentPin:r.parentPin||S.parentPin,posBehaviors:r.posBehaviors||S.posBehaviors,negBehaviors:r.negBehaviors||S.negBehaviors,streak:r.streak||S.streak,lastActive:r.lastActive||S.lastActive,theme:r.theme||S.theme,pendingChanges:r.pendingChanges||S.pendingChanges||[],healthItems:r.healthItems||S.healthItems||[]});applyTheme();lsSave();
       var allPend=r.pendingChanges||[];
       var pend=allPend.filter(function(p){return p.status==='pending'});
       if(pend.length&&deviceRole!=='child'){notifyParentsPending(pend[0].label||'درخواست جدید')}
@@ -61,7 +70,8 @@ function startFirebaseSync(){db.ref(FAMILY_PATH).on('value',function(snap){if(ig
         }
         lastKnownDone=nowDone;
       }
-      render()}syncStatus='online';updateSyncDot()},function(){syncStatus='offline';updateSyncDot()})}
+      render()}syncStatus='online';updateSyncDot()},function(){syncStatus='offline';updateSyncDot()})
+}
 function updateSyncDot(){var el=document.getElementById('syncDot');if(el)el.className='sync-dot '+(syncStatus==='online'?'on':syncStatus==='offline'?'off':'')}
 function getDay(k){return S.days[k]||{tasks:{},notes:[]}}
 function mutDay(k,fn){var d=JSON.parse(JSON.stringify(getDay(k)));d.tasks=d.tasks||{};d.notes=d.notes||[];fn(d);S.days[k]=d;updateStreak();saveProfile();render()}
