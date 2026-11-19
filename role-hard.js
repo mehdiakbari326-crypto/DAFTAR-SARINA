@@ -1,12 +1,9 @@
-/* Permanent device role: parent vs Sarina - no parent login on child tablet */
+/* Permanent device role: parent vs Sarina */
 (function(){
   function applyHardRole(){
     try{
       var role = localStorage.getItem('daftar-device-role-v2') || '';
-      if(!role){
-        // keep existing role picker from app.js
-        return;
-      }
+      if(!role) return;
       if(typeof deviceRole !== 'undefined') deviceRole = role;
       if(role === 'parent'){
         if(typeof isParent !== 'undefined') isParent = true;
@@ -17,7 +14,6 @@
     }catch(e){}
   }
 
-  // Patch setDeviceRole if present
   var _set = typeof setDeviceRole === 'function' ? setDeviceRole : null;
   if(_set){
     setDeviceRole = function(role){
@@ -35,7 +31,6 @@
     };
   }
 
-  // Hide parent entry on child after every render
   var _render = typeof render === 'function' ? render : null;
   if(_render){
     render = function(){
@@ -43,11 +38,9 @@
       _render.apply(this, arguments);
       try{
         if(deviceRole === 'child'){
-          // remove any parent-login / exit-parent buttons
           document.querySelectorAll('[data-act="enter-parent"],[data-act="exit-parent"]').forEach(function(el){
             el.style.display = 'none';
           });
-          // footer label
           var fa = document.querySelector('.foot-actions');
           if(fa && !fa.querySelector('.sarina-only-label')){
             fa.innerHTML = '<span class="muted sarina-only-label" style="font-size:12px">🦄 مخصوص سارینا</span>';
@@ -66,7 +59,6 @@
     };
   }
 
-  // Block enter-parent on child
   document.addEventListener('click', function(e){
     var t = e.target.closest('[data-act]');
     if(!t) return;
@@ -85,12 +77,18 @@
     }
   }, true);
 
-  // Apply on load
+  function boot(){
+    setTimeout(function(){
+      applyHardRole();
+      if(typeof deviceRole !== 'undefined' && deviceRole === 'parent' && typeof cancelAllNotifs === 'function'){
+        try{ cancelAllNotifs(); }catch(e){}
+      }
+      if(typeof render==='function') render();
+    }, 80);
+  }
   if(document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', function(){
-      setTimeout(function(){ applyHardRole(); if(typeof render==='function') render(); }, 50);
-    });
+    document.addEventListener('DOMContentLoaded', boot);
   } else {
-    setTimeout(function(){ applyHardRole(); if(typeof render==='function') render(); }, 50);
+    boot();
   }
 })();
