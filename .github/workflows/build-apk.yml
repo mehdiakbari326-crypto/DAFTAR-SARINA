@@ -37,28 +37,13 @@ jobs:
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
-            # POST_NOTIFICATIONS for Android 13+
             if ! grep -q "POST_NOTIFICATIONS" "$MANIFEST"; then
-              sed -i 's|<manifest |<manifest |' "$MANIFEST"
-              python3 - <<'PY'
-import re
-path = "android/app/src/main/AndroidManifest.xml"
-with open(path, encoding="utf-8") as f:
-    s = f.read()
-perms = '''    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.VIBRATE" />
-'''
-if "POST_NOTIFICATIONS" not in s:
-    s = s.replace("<application", perms + "    <application", 1)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(s)
-    print("permissions added")
-else:
-    print("permissions already present")
-PY
+              sed -i 's|<application|    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <application|' "$MANIFEST"
+              echo "permissions added"
+            else
+              echo "permissions already present"
             fi
-            cat "$MANIFEST" | head -40
+            head -30 "$MANIFEST"
           fi
 
       - name: App icon
