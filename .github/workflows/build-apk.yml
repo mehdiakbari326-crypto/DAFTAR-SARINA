@@ -24,8 +24,9 @@ jobs:
         run: |
           mkdir -p www
           cp index.html www/index.html
-          if [ -f app.js ]; then cp app.js www/app.js; fi
-          if [ -f role-hard.js ]; then cp role-hard.js www/role-hard.js; fi
+          for f in app.js app2.js role-hard.js; do
+            if [ -f "$f" ]; then cp "$f" "www/$f"; fi
+          done
           ls -la www/
 
       - name: Install Capacitor
@@ -40,11 +41,7 @@ jobs:
           if [ -f "$MANIFEST" ]; then
             if ! grep -q "POST_NOTIFICATIONS" "$MANIFEST"; then
               sed -i 's|<application|    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <application|' "$MANIFEST"
-              echo "permissions added"
-            else
-              echo "permissions already present"
             fi
-            head -30 "$MANIFEST"
           fi
 
       - name: App icon
