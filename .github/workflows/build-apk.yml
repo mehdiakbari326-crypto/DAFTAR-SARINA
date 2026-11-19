@@ -25,6 +25,7 @@ jobs:
           mkdir -p www
           cp index.html www/index.html
           if [ -f app.js ]; then cp app.js www/app.js; fi
+          if [ -f role-hard.js ]; then cp role-hard.js www/role-hard.js; fi
           ls -la www/
 
       - name: Install Capacitor
