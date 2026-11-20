@@ -17,7 +17,7 @@
 .fun-hero:before{content:'';position:absolute;inset:-40% -20% auto;height:80%;background:radial-gradient(circle at 30% 40%,rgba(255,255,255,.25),transparent 55%);pointer-events:none}
 .sparkle{position:absolute;font-size:16px;opacity:.85;animation:twinkle 2.4s ease-in-out infinite;pointer-events:none}
 .sparkle.s1{top:12px;left:14px}.sparkle.s2{top:28px;right:60px;animation-delay:.4s}.sparkle.s3{bottom:50px;left:40%;animation-delay:.8s}
-@keyframes twinkle{0%,100%{transform:scale(1) rotate(0);opacity:.6}50%{transform:scale(1.25) rotate(12deg);opacity:1}}
+@keyframes twinkle{0%,100%{transform:scale(1);opacity:.6}50%{transform:scale(1.25);opacity:1}}
 .hero-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px;position:relative;z-index:1}
 .hero-titles{flex:1}.hero-badge{display:inline-block;background:rgba(255,255,255,.25);border:1px solid rgba(255,255,255,.45);border-radius:99px;padding:3px 12px;font-size:11px;font-weight:800;margin-bottom:6px}
 .mascot{font-size:48px;filter:drop-shadow(0 4px 8px rgba(0,0,0,.15));position:relative;z-index:1}
@@ -30,7 +30,7 @@
 .name{font-weight:800;font-size:17px;width:100%;background:rgba(255,255,255,.28);border:2px solid rgba(255,255,255,.4);border-radius:16px;padding:10px 40px 10px 14px;color:#fff;text-align:center}
 .tabs,.fun-tabs{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;padding:5px;background:rgba(255,255,255,.2);border-radius:20px;position:relative;z-index:1;border:1px solid rgba(255,255,255,.25)}
 .tabs button,.fun-tabs button{background:transparent;padding:8px 2px 6px;border-radius:14px;font-weight:800;font-size:10px;color:rgba(255,255,255,.9);min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
-.fun-tabs button .tab-icon{font-size:18px;line-height:1;display:block}.fun-tabs button .tab-lab{font-size:10px;line-height:1.2}
+.fun-tabs button .tab-icon{font-size:18px;line-height:1;display:block}.fun-tabs button .tab-lab{font-size:10px}
 .tabs button[aria-selected=true],.fun-tabs button[aria-selected=true]{background:#fff;color:var(--accent-deep);box-shadow:0 4px 12px rgba(0,0,0,.12);transform:translateY(-2px)}
 .level-card,.card,.week,.stats{background:var(--surface);border:1.5px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
 .level-card{padding:14px 16px;display:grid;gap:8px}
@@ -40,7 +40,7 @@
 .xp-bar{height:10px;border-radius:99px;background:var(--line);overflow:hidden}.xp-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--pink));border-radius:99px}
 .card{padding:16px;display:grid;gap:12px}.card-h h2{margin:0;font-size:15.5px;font-weight:800}
 .muted{color:var(--muted);font-size:13px;margin:0}
-.btn{min-height:44px;border-radius:14px;padding:6px 18px;font-weight:700;background:var(--accent);color:#fff}.btn.pink{background:var(--pink)}
+.btn{min-height:44px;border-radius:14px;padding:6px 18px;font-weight:700;background:var(--accent);color:#fff}
 .ghost{border:1.5px solid var(--line);background:transparent;border-radius:99px;padding:5px 12px;font-size:12.5px;font-weight:600}
 .inp{min-height:44px;border:1.5px solid var(--line);border-radius:14px;padding:6px 12px;background:var(--bg)}
 form.add{display:grid;grid-template-columns:1fr auto;gap:8px}form.add3{display:grid;grid-template-columns:1fr 80px auto;gap:8px}
@@ -66,13 +66,11 @@ ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 @keyframes fall{0%{opacity:1;transform:translateY(-20px)}100%{opacity:0;transform:translateY(100vh)}}
 .sync-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-left:6px;background:#aaa}.sync-dot.on{background:#2E9E6A}.sync-dot.off{background:#E86A4A}
 .foot{display:grid;gap:10px}.foot-actions{display:flex;justify-content:center}.rule{font-size:12px;color:var(--muted);text-align:center}
-.datebar{display:grid;grid-template-columns:44px 1fr 44px;align-items:center;gap:8px}.icon{width:44px;height:44px;display:grid;place-items:center;border-radius:50%;border:1.5px solid var(--line);background:var(--surface)}
+.datebar{display:grid;grid-template-columns:44px 1fr 44px;align-items:center;gap:8px}
 .type{display:grid;grid-template-columns:1fr 1fr;gap:6px}.type button{min-height:42px;border-radius:14px;border:2px solid var(--line);background:transparent;font-weight:700;color:var(--muted)}
 .type .tp[aria-pressed=true]{background:var(--pos-soft);border-color:var(--pos);color:var(--pos)}.type .tn[aria-pressed=true]{background:var(--neg-soft);border-color:var(--neg);color:var(--neg)}
 .empty-fun{text-align:center;padding:20px}.empty-fun .big{font-size:40px}
 .chart-wrap{display:flex;align-items:flex-end;gap:3px;height:140px;overflow-x:auto}
-.chart-col{flex:1;min-width:14px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
-.chart-bar{width:100%;max-width:22px;border-radius:6px 6px 3px 3px;min-height:3px}.chart-lbl{font-size:9px;color:var(--muted)}
 .theme-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .theme-btn{border:2px solid var(--line);border-radius:16px;padding:14px 10px;text-align:center;background:var(--surface);font-weight:700}
 .theme-btn.active{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}.theme-btn .t-icon{font-size:28px;display:block}
@@ -102,11 +100,9 @@ ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 .ach{background:var(--accent-soft);color:var(--accent-deep);border-radius:99px;padding:4px 12px;font-size:12px;font-weight:800}
 .chip-edit{display:inline-flex;align-items:center;gap:4px;border:1.5px solid var(--line);border-radius:99px;padding:4px 10px;font-size:13px;margin:3px}
 .health-report-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
-.hr-emoji{font-size:28px}.hr-info strong{display:block}.hr-info small{color:var(--muted)}
-.balloon-layer{position:fixed;inset:0;pointer-events:none;z-index:400;overflow:hidden}
+.hr-emoji{font-size:28px}.balloon-layer{position:fixed;inset:0;pointer-events:none;z-index:400;overflow:hidden}
 .balloon{position:absolute;bottom:-80px;width:36px;height:44px;border-radius:50%;animation:rise linear forwards}
-.balloon:after{content:'';position:absolute;left:50%;bottom:-12px;width:2px;height:14px;background:rgba(0,0,0,.15)}
-@keyframes rise{0%{transform:translateY(0) scale(1);opacity:1}70%{opacity:1}100%{transform:translateY(-110vh) scale(1.2);opacity:0}}
+@keyframes rise{0%{transform:translateY(0);opacity:1}100%{transform:translateY(-110vh);opacity:0}}
 </style>
 </head>
 <body>
@@ -115,6 +111,7 @@ ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
 <script src="app.js"></script>
 <script src="app2.js"></script>
+<script src="persist-guard.js"></script>
 <script src="role-hard.js"></script>
 <script src="approve-fix.js"></script>
 <script src="enhance.js"></script>

@@ -29,16 +29,13 @@ jobs:
           set -e
           mkdir -p www
           cp index.html www/index.html
-          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js; do
+          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js; do
             if [ -f "$f" ]; then cp "$f" "www/$f"; echo "copied $f"; fi
           done
           BLOB_SHA="25a039f0a5ae4cee254e40e37f7a4445ab664e47"
           gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${BLOB_SHA}" --jq .content | base64 -d > www/app.js
           echo "app.js size: $(wc -c < www/app.js)"
-          if [ "$(wc -c < www/app.js)" -lt 10000 ]; then
-            echo "app.js too small"
-            exit 1
-          fi
+          test "$(wc -c < www/app.js)" -gt 10000
           ls -la www/
 
       - name: Install Capacitor
@@ -46,6 +43,16 @@ jobs:
 
       - name: Create Android project
         run: npx cap add android
+
+      - name: Keep applicationId stable
+        run: |
+          # Ensure package stays com.daftar.roozane so updates overwrite same app
+          if [ -f android/app/build.gradle ]; then
+            sed -i 's/applicationId .*/applicationId "com.daftar.roozane"/' android/app/build.gradle || true
+          fi
+          if [ -f android/app/build.gradle.kts ]; then
+            sed -i 's/applicationId = .*/applicationId = "com.daftar.roozane"/' android/app/build.gradle.kts || true
+          fi
 
       - name: Add notification permissions
         run: |
