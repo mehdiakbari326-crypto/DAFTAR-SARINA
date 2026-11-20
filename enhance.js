@@ -1,8 +1,30 @@
-/* Enhancements: fun hero, calendar, behaviors, health report, 80% party, prizes */
+/* Enhancements: scoring overhaul, fun hero, calendar, behaviors, party, prizes */
 (function(){
   try{
     var st=document.createElement('style');
-    st.textContent='@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}@keyframes twinkle{0%,100%{transform:scale(1);opacity:.6}50%{transform:scale(1.25);opacity:1}}';
+    st.textContent=[
+      '@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}',
+      '@keyframes twinkle{0%,100%{transform:scale(1);opacity:.6}50%{transform:scale(1.25);opacity:1}}',
+      '.star-bank{background:linear-gradient(145deg,#FFF7ED,#F3E8FF 50%,#FCE7F3);border:2px solid #E9D5FF;border-radius:24px;padding:16px;box-shadow:0 10px 28px rgba(155,109,255,.15);display:grid;gap:12px}',
+      '.sb-title{font-weight:800;font-size:16px;display:flex;align-items:center;gap:8px;margin:0}',
+      '.sb-big{display:grid;grid-template-columns:1fr 1fr;gap:10px}',
+      '.sb-cell{background:#fff;border-radius:18px;padding:12px 10px;text-align:center;border:2px solid #EDE4FF}',
+      '.sb-cell .num{font-size:28px;font-weight:800;color:#6B3FBF;line-height:1.1}',
+      '.sb-cell .lbl{font-size:11px;font-weight:700;color:#8B7AA8;margin-top:4px}',
+      '.sb-cell.gold{border-color:#FFC94A;background:linear-gradient(180deg,#fff,#FFF6D6)}',
+      '.sb-cell.pink{border-color:#FF8BC2;background:linear-gradient(180deg,#fff,#FFEAF4)}',
+      '.sb-break{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}',
+      '.sb-item{background:rgba(255,255,255,.85);border-radius:14px;padding:8px 4px;text-align:center;border:1.5px solid #EDE4FF}',
+      '.sb-item .n{font-size:18px;font-weight:800}',
+      '.sb-item .l{font-size:10px;color:#8B7AA8;font-weight:700}',
+      '.sb-item.pos .n{color:#2E9E6A}',
+      '.sb-item.neg .n{color:#E86A4A}',
+      '.sb-week{background:#fff;border-radius:16px;padding:10px 12px;border:1.5px solid #EDE4FF}',
+      '.sb-week-row{display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:13px}',
+      '.sb-bar{height:12px;border-radius:99px;background:#EDE4FF;overflow:hidden;margin-top:8px}',
+      '.sb-bar i{display:block;height:100%;background:linear-gradient(90deg,#9B6DFF,#FF8BC2,#FFC94A);border-radius:99px}',
+      '.sb-hint{font-size:12px;color:#8B7AA8;margin:0;text-align:center}'
+    ].join('');
     document.head.appendChild(st);
   }catch(e){}
 
@@ -10,6 +32,30 @@
   function taskDone(k){return (dayStats(k).done||0)}
   function taskPct(k){return Math.min(100,Math.round(taskDone(k)/taskMax()*100))}
   function dayTotal(k){return score(dayStats(k))}
+
+  /* Robust totals – never silently zero when data exists */
+  function safeTotalScore(){
+    var t=0;
+    try{
+      var keys=Object.keys(S.days||{});
+      keys.forEach(function(k){t+=score(dayStats(k))});
+    }catch(e){}
+    return t;
+  }
+  function safeWeekScore(){
+    var t=0;
+    try{
+      for(var i=0;i<7;i++) t+=score(dayStats(addDays(todayKey(),-i)));
+    }catch(e){}
+    return t;
+  }
+  function safeAvailable(){
+    var spent=0;
+    try{
+      (S.claims||[]).forEach(function(c){spent+=(c.c||0)});
+    }catch(e){}
+    return Math.max(0,safeTotalScore()-spent);
+  }
 
   var celebratedDays={};
   try{celebratedDays=JSON.parse(localStorage.getItem('daftar-celeb-days')||'{}')}catch(e){}
@@ -69,9 +115,7 @@
   function funHeader(){
     var mascot=isParent?'👨‍👩‍👧':(typeof dayChar==='function'?dayChar().emoji:'🦄');
     var pct=taskPct(todayKey());
-    var stars='⭐'.repeat(Math.min(5,Math.max(1,Math.ceil(pct/20))));
-    // MUST use data-act="view" data-v="..." to match app2.js click handler
-    // view values must be: today, health, report, rewards, parent, settings
+    var stars='⭐'.repeat(Math.min(5,Math.max(1,Math.ceil(pct/20)||1)));
     var tabs=[
       {v:'today',icon:'🌟',lab:'امروز'},
       {v:'health',icon:'🥗',lab:'سلامتی'},
@@ -82,33 +126,60 @@
     ];
     var h='<header class="hero fun-hero">';
     h+='<div class="sparkle s1">✨</div><div class="sparkle s2">💜</div><div class="sparkle s3">🌸</div>';
-    h+='<div class="hero-top">';
-    h+='<div class="hero-titles">';
+    h+='<div class="hero-top"><div class="hero-titles">';
     h+='<div class="hero-badge">'+stars+' باشگاه ستاره‌ها</div>';
     h+='<h1>دفتر جادویی سارینا <span id="syncDot" class="sync-dot"></span></h1>';
-    h+='<p class="sub">هر کار خوب = یک ستاره بنفش ✨</p>';
-    h+='</div>';
-    h+='<div class="mascot bounce">'+mascot+'</div>';
-    h+='</div>';
-    if(!isParent){
-      h+='<div class="greet fun-greet">'+funGreet()+'</div>';
-    }
+    h+='<p class="sub">هر کار خوب = یک ستاره بنفش ✨</p></div>';
+    h+='<div class="mascot bounce">'+mascot+'</div></div>';
+    if(!isParent) h+='<div class="greet fun-greet">'+funGreet()+'</div>';
     h+='<div class="name-wrap"><span class="name-star">⭐</span>';
-    h+='<input id="nameIn" class="name" value="'+esc(S.name)+'" '+(isParent?'':'readonly')+'>';
-    h+='</div>';
+    h+='<input id="nameIn" class="name" value="'+esc(S.name)+'" '+(isParent?'':'readonly')+'></div>';
     h+='<div class="tabs fun-tabs" id="mainTabs">';
     tabs.forEach(function(t){
       var sel=view===t.v?'true':'false';
       h+='<button type="button" data-act="view" data-v="'+t.v+'" aria-selected="'+sel+'">';
-      h+='<span class="tab-icon">'+t.icon+'</span><span class="tab-lab">'+t.lab+'</span>';
-      h+='</button>';
+      h+='<span class="tab-icon">'+t.icon+'</span><span class="tab-lab">'+t.lab+'</span></button>';
     });
     h+='</div></header>';
     return h;
   }
+  if(typeof header==='function') header=funHeader;
 
-  if(typeof header==='function'){
-    header=funHeader;
+  /* ---- STAR BANK: clear scoring panel ---- */
+  function starBank(k){
+    k=k||curKey||todayKey();
+    var st=dayStats(k);
+    var dayPts=score(st);
+    var life=safeTotalScore();
+    var avail=safeAvailable();
+    var week=safeWeekScore();
+    var goal=S.goal||15;
+    var weekPct=Math.min(100,Math.round((week/Math.max(1,goal))*100));
+    var done=st.done||0, missed=st.missed||0, pos=st.pos||0, neg=st.neg||0;
+
+    var h='<section class="star-bank">';
+    h+='<p class="sb-title">⭐ بانک ستاره‌های سارینا</p>';
+    h+='<div class="sb-big">';
+    h+='<div class="sb-cell gold"><div class="num">'+fa(life)+'</div><div class="lbl">کل ستاره‌ها</div></div>';
+    h+='<div class="sb-cell pink"><div class="num">'+fa(avail)+'</div><div class="lbl">قابل خرج برای پاداش</div></div>';
+    h+='</div>';
+
+    h+='<div class="sb-break">';
+    h+='<div class="sb-item pos"><div class="n">'+fa(done)+'</div><div class="l">✓ تسک</div></div>';
+    h+='<div class="sb-item pos"><div class="n">'+fa(pos)+'</div><div class="l">💚 رفتار+</div></div>';
+    h+='<div class="sb-item neg"><div class="n">'+fa(missed)+'</div><div class="l">✕ تسک</div></div>';
+    h+='<div class="sb-item neg"><div class="n">'+fa(neg)+'</div><div class="l">❤️ رفتار−</div></div>';
+    h+='</div>';
+
+    h+='<div class="sb-week">';
+    h+='<div class="sb-week-row"><span>امتیاز امروز</span><b style="color:#6B3FBF">'+(dayPts>=0?'+':'')+fa(dayPts)+'</b></div>';
+    h+='<div class="sb-week-row" style="margin-top:6px"><span>هدف هفته</span><b>'+fa(week)+' / '+fa(goal)+'</b></div>';
+    h+='<div class="sb-bar"><i style="width:'+weekPct+'%"></i></div>';
+    h+='</div>';
+
+    h+='<p class="sb-hint">فرمول: هر تسک ✓ و هر رفتار مثبت = ۱+ ستاره · منفی = ۱−</p>';
+    h+='</section>';
+    return h;
   }
 
   function prettyDatebar(){
@@ -124,8 +195,7 @@
       +(isToday?'<span class="cal-badge">'+cheer+' امروز</span>':'')
       +'<div class="cal-points">تسک‌ها: <b>'+fa(done)+'</b> از <b>'+fa(max)+'</b>'
       +' <span class="cal-pct">('+fa(pct)+'٪)</span></div>'
-      +'<div class="cal-points" style="margin-top:2px">امتیاز کل: <b>'+fa(total)+'</b>'
-      +(total>max?' <span class="cal-pct">(+ رفتارها)</span>':'')+'</div>'
+      +'<div class="cal-points" style="margin-top:2px">امتیاز روز: <b>'+(total>=0?'+':'')+fa(total)+'</b></div>'
       +'<div class="cal-bar"><i style="width:'+pct+'%"></i></div>'
       +'</div>'
       +'<button type="button" class="cal-nav" data-act="day" data-n="1"'+(isToday?' disabled':'')+' aria-label="روز بعد">‹</button>'
@@ -137,19 +207,21 @@
     var weekKeys=[];for(var i=0;i<7;i++)weekKeys.push(addDays(today,-i));
     var monthKeys=[];for(var m=0;m<30;m++)monthKeys.push(addDays(today,-m));
     var dayPts=dayTotal(today);
-    var weekPts=0;weekKeys.forEach(function(k){weekPts+=score(dayStats(k))});
+    var weekPts=safeWeekScore();
     var monthPts=0;monthKeys.forEach(function(k){monthPts+=score(dayStats(k))});
     var claims=S.claims||[];
     var dayClaims=claims.filter(function(c){return c.k===today});
     var weekClaims=claims.filter(function(c){return weekKeys.indexOf(c.k)>=0});
     var monthClaims=claims.filter(function(c){return monthKeys.indexOf(c.k)>=0});
+    var avail=safeAvailable();
 
     var h='<section class="card prizes-card">';
     h+='<div class="card-h"><h2>🏆 جوایز و دستاوردها</h2></div>';
+    h+='<p class="muted" style="margin:0 0 8px">ستاره‌های قابل خرج: <b style="color:var(--accent-deep)">'+fa(avail)+'</b></p>';
     h+='<div class="prize-tabs">';
     h+='<div class="prize-box day"><div class="pb-icon">⭐</div><div class="pb-label">امروز</div><div class="pb-val">'+fa(dayPts)+' امتیاز</div>';
     if(dayClaims.length)h+='<div class="pb-list">'+dayClaims.map(function(c){return '🎁 '+esc(c.t)}).join('<br>')+'</div>';
-    else h+='<div class="pb-empty">هنوز جایزه‌ای نیست</div>';
+    else h+='<div class="pb-empty">جایزه‌ای گرفته نشده</div>';
     h+='</div>';
     h+='<div class="prize-box week"><div class="pb-icon">🌈</div><div class="pb-label">این هفته</div><div class="pb-val">'+fa(weekPts)+' امتیاز</div>';
     if(weekClaims.length)h+='<div class="pb-list">'+weekClaims.map(function(c){return '🎁 '+esc(c.t)}).join('<br>')+'</div>';
@@ -164,6 +236,7 @@
     if((S.streak||0)>=3)h+='<span class="ach">🔥 '+fa(S.streak)+' روز پشت‌سرهم</span>';
     if(weekPts>=(S.goal||15))h+='<span class="ach">🎯 هدف هفته</span>';
     if(monthPts>=50)h+='<span class="ach">💎 ستاره ماه</span>';
+    if(avail>0)h+='<span class="ach">🛍️ '+fa(avail)+' ستاره قابل خرج</span>';
     h+='</div></section>';
     return h;
   }
@@ -186,8 +259,7 @@
       h+='<div class="health-report-row">';
       h+='<span class="hr-emoji">'+(it.emoji||'🍱')+'</span>';
       h+='<div class="hr-info"><strong>'+esc(it.title)+'</strong>';
-      h+='<small>۳۰ روز: <b>'+fa(count30)+'</b> بار • ۶۰ روز: <b>'+fa(count60)+'</b> بار</small></div>';
-      h+='</div>';
+      h+='<small>۳۰ روز: <b>'+fa(count30)+'</b> بار • ۶۰ روز: <b>'+fa(count60)+'</b> بار</small></div></div>';
     });
     h+='</section>';
     return h;
@@ -201,15 +273,12 @@
     pos.forEach(function(c,i){
       h+='<span class="chip-edit">'+esc(c)+' <button type="button" class="del" data-act="del-pos-beh" data-i="'+i+'">×</button></span>';
     });
-    h+='</div>';
-    h+='<form class="add" id="posBehForm" style="margin-top:8px"><input class="inp" id="posBehIn" placeholder="رفتار مثبت جدید..."><button class="btn" type="submit">+</button></form>';
+    h+='</div><form class="add" id="posBehForm" style="margin-top:8px"><input class="inp" id="posBehIn" placeholder="رفتار مثبت جدید..."><button class="btn" type="submit">+</button></form>';
     h+='<p class="muted" style="margin-top:12px">منفی</p><div class="chips">';
     neg.forEach(function(c,i){
       h+='<span class="chip-edit">'+esc(c)+' <button type="button" class="del" data-act="del-neg-beh" data-i="'+i+'">×</button></span>';
     });
-    h+='</div>';
-    h+='<form class="add" id="negBehForm" style="margin-top:8px"><input class="inp" id="negBehIn" placeholder="رفتار منفی جدید..."><button class="btn" type="submit">+</button></form>';
-    h+='</section>';
+    h+='</div><form class="add" id="negBehForm" style="margin-top:8px"><input class="inp" id="negBehIn" placeholder="رفتار منفی جدید..."><button class="btn" type="submit">+</button></form></section>';
     return h;
   }
 
@@ -218,12 +287,24 @@
     todayView=function(){
       var html=_todayView();
       html=html.replace(/<div class="datebar">[\s\S]*?<\/div>/, prettyDatebar());
+      // inject star bank after calendar / near stats
+      var bank=starBank(curKey);
+      if(html.indexOf('star-bank')<0){
+        // after cal-card or after stats
+        if(html.indexOf('class="stats"')>=0){
+          html=html.replace(/(<div class="stats">[\s\S]*?<\/div>)/, function(m){return bank+m});
+        }else if(html.indexOf('fun-cal')>=0){
+          html=html.replace(/(<div class="cal-card fun-cal">[\s\S]*?<\/div>)/, function(m){return m+bank});
+        }else{
+          html=bank+html;
+        }
+      }
       var prizes=prizesPanel();
       if(html.indexOf('prizes-card')<0){
         if(html.indexOf('class="week"')>=0){
           html=html.replace(/(<div class="week">[\s\S]*?<\/div>)/, function(m){return m+prizes});
         }else{
-          html=prizes+html;
+          html=html+prizes;
         }
       }
       return html;
@@ -234,10 +315,14 @@
   if(_reportView){
     reportView=function(){
       var html=_reportView();
+      html=starBank(todayKey())+html;
       html+=healthReportBlock();
-      html+='<section class="card"><div class="card-h"><h2>🎯 ظرفیت امتیاز روزانه</h2></div>';
-      html+='<p>تعداد تسک فعال: <b>'+fa(S.tasks.length)+'</b> ← حداکثر امتیاز از <b>تسک‌ها</b>: <b>'+fa(taskMax())+'</b></p>';
-      html+='<p class="muted">رفتارهای مثبت امتیاز جداگانه می‌دهند. با افزودن/حذف تسک، سقف به‌روز می‌شود.</p></section>';
+      html+='<section class="card"><div class="card-h"><h2>🎯 راهنمای امتیاز</h2></div>';
+      html+='<p>✅ تسک انجام‌شده: <b>+۱</b></p>';
+      html+='<p>💚 رفتار مثبت: <b>+۱</b></p>';
+      html+='<p>❌ تسک انجام‌نشده: <b>−۱</b></p>';
+      html+='<p>❤️ رفتار منفی: <b>−۱</b></p>';
+      html+='<p class="muted">ستاره‌های قابل خرج = کل ستاره‌ها − هزینه پاداش‌های گرفته‌شده</p></section>';
       return html;
     };
   }
@@ -307,5 +392,5 @@
   }
 
   setTimeout(function(){try{checkDayParty()}catch(e){}},600);
-  console.log('enhance.js loaded');
+  console.log('enhance.js scoring overhaul loaded');
 })();
