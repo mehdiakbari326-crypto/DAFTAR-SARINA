@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -24,21 +26,73 @@ jobs:
         run: |
           mkdir -p www
           cp index.html www/index.html
-          for f in app.js app2.js role-hard.js approve-fix.js; do
+          for f in app2.js role-hard.js approve-fix.js; do
             if [ -f "$f" ]; then cp "$f" "www/$f"; fi
           done
-          # Restore app.js from base64 if it is broken/placeholder
-          if [ -f app.b64.txt ]; then
-            python3 - <<'PY'
-import base64, pathlib
-b = pathlib.Path('app.b64.txt').read_text().replace('\n','').replace('\r','')
-data = base64.b64decode(b)
-pathlib.Path('www/app.js').write_bytes(data)
-print('restored app.js from b64', len(data))
+
+          # Restore last known-good full app.js from git history
+          git show 04f0460ac405dbd658921befc41098ff60e2cfb6:app.js > www/app.js
+          echo "restored app.js size: $(wc -c < www/app.js)"
+
+          # Fix the approve bug in restored app.js
+          python3 - <<'PY'
+import pathlib
+p = pathlib.Path('www/app.js')
+js = p.read_text(encoding='utf-8')
+
+old_apply = "function applyPending(item){if(!item||item.status!=='pending')return;var p=item.payload||{};if(item.type==='mark'){mutDay(p.k,function(day){if(!day.tasks[p.id])day.tasks[p.id]={t:p.title||''};if(p.s)day.tasks[p.id].s=p.s;else if(day.tasks[p.id])delete day.tasks[p.id].s})}else if(item.type==='note'){mutDay(p.k,function(day){day.notes=day.notes||[];day.notes.push({id:p.noteId||uid(),t:p.t,type:p.noteType,ts:p.ts||Date.now()})})}}"
+
+new_apply = """function applyPending(item){
+  if(!item)return;
+  var p=item.payload||{};
+  if(item.type==='mark'){
+    var k=p.k||todayKey();
+    var d=JSON.parse(JSON.stringify(getDay(k)));
+    d.tasks=d.tasks||{};
+    if(!d.tasks[p.id])d.tasks[p.id]={t:p.title||''};
+    if(p.s)d.tasks[p.id].s=p.s;
+    else if(d.tasks[p.id])delete d.tasks[p.id].s;
+    S.days[k]=d;
+  }else if(item.type==='note'){
+    var k2=p.k||todayKey();
+    var d2=JSON.parse(JSON.stringify(getDay(k2)));
+    d2.notes=d2.notes||[];
+    var exists=d2.notes.some(function(n){return n.id===(p.noteId||'')});
+    if(!exists)d2.notes.push({id:p.noteId||uid(),t:p.t,type:p.noteType,ts:p.ts||Date.now()});
+    S.days[k2]=d2;
+  }
+  updateStreak();
+}"""
+
+old_approve = "function approvePending(id){var item=(S.pendingChanges||[]).find(function(p){return p.id===id});if(!item)return;item.status='approved';applyPending(item);saveProfile();showToast('تأیید شد ✅');render()}"
+
+new_approve = """function approvePending(id){
+  var item=(S.pendingChanges||[]).find(function(p){return p.id===id});
+  if(!item||item.status!=='pending')return;
+  applyPending(item);
+  item.status='approved';
+  saveProfile();
+  showToast('تأیید شد ✅');
+  render();
+}"""
+
+if old_apply in js:
+    js = js.replace(old_apply, new_apply)
+    print('applyPending fixed')
+else:
+    print('WARN applyPending pattern not found')
+
+if old_approve in js:
+    js = js.replace(old_approve, new_approve)
+    print('approvePending fixed')
+else:
+    print('WARN approvePending pattern not found')
+
+p.write_text(js, encoding='utf-8')
+print('final size', len(js))
 PY
-          fi
+
           ls -la www/
-          wc -c www/app.js || true
 
       - name: Install Capacitor
         run: npm install
