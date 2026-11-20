@@ -25,7 +25,6 @@ jobs:
       - name: Compute version
         id: ver
         run: |
-          # versionCode must strictly increase for Android to install as update
           CODE=$((1000 + ${{ github.run_number }}))
           NAME="1.${{ github.run_number }}"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
@@ -46,30 +45,39 @@ jobs:
           done
           BLOB_SHA="25a039f0a5ae4cee254e40e37f7a4445ab664e47"
           gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${BLOB_SHA}" --jq .content | base64 -d > www/app.js
-          echo "app.js size: $(wc -c < www/app.js)"
           test "$(wc -c < www/app.js)" -gt 10000
 
-          # Inject visible app version into index.html footer area
           cat > www/version.js << EOF
-          window.APP_VERSION = "${APP_VERSION}";
-          window.APP_VERSION_CODE = ${APP_VERSION_CODE};
-          (function(){
-            function show(){
-              try{
-                var el = document.querySelector('.rule');
-                if(el && el.textContent.indexOf('نسخه') < 0){
-                  el.textContent = el.textContent + ' • نسخه ' + window.APP_VERSION;
-                }
-              }catch(e){}
-            }
-            setTimeout(show, 600);
-            setTimeout(show, 2000);
-          })();
-          EOF
-          # load version.js from index
-          if grep -q 'version.js' www/index.html; then
-            echo "version.js already linked"
-          else
+window.APP_VERSION = "${APP_VERSION}";
+window.APP_VERSION_CODE = ${APP_VERSION_CODE};
+(function(){
+  function paint(){
+    try{
+      var v = window.APP_VERSION || '?';
+      var nodes = document.querySelectorAll('.rule, .foot .rule');
+      nodes.forEach(function(el){
+        if(el && el.textContent.indexOf('نسخه') < 0){
+          el.textContent = (el.textContent || '') + ' • نسخه ' + v;
+        }
+      });
+      // also badge near sync dot title if present
+      var h1 = document.querySelector('.hero h1, .fun-hero h1');
+      if(h1 && !document.getElementById('verBadge')){
+        var b = document.createElement('span');
+        b.id = 'verBadge';
+        b.textContent = 'v' + v;
+        b.style.cssText = 'margin-right:8px;font-size:11px;opacity:.9;background:rgba(255,255,255,.25);padding:2px 8px;border-radius:99px;font-weight:800';
+        h1.appendChild(b);
+      }
+    }catch(e){}
+  }
+  setTimeout(paint, 500);
+  setTimeout(paint, 1500);
+  setTimeout(paint, 3000);
+  setInterval(paint, 5000);
+})();
+EOF
+          if ! grep -q 'version.js' www/index.html; then
             sed -i 's|</body>|<script src="version.js"></script>\n</body>|' www/index.html
           fi
           ls -la www/
@@ -86,33 +94,19 @@ jobs:
           APP_VERSION_CODE: ${{ steps.ver.outputs.code }}
         run: |
           set -e
-          GRADLE="android/app/build.gradle"
-          if [ ! -f "$GRADLE" ]; then
-            GRADLE="android/app/build.gradle.kts"
-          fi
-          echo "Using $GRADLE"
           if [ -f android/app/build.gradle ]; then
-            # Groovy DSL
             sed -i 's/applicationId .*/applicationId "com.daftar.roozane"/' android/app/build.gradle
-            # versionCode
             if grep -q 'versionCode' android/app/build.gradle; then
               sed -i "s/versionCode .*/versionCode ${APP_VERSION_CODE}/" android/app/build.gradle
             else
               sed -i "/applicationId/a\        versionCode ${APP_VERSION_CODE}" android/app/build.gradle
             fi
-            # versionName
             if grep -q 'versionName' android/app/build.gradle; then
               sed -i "s/versionName .*/versionName \"${APP_VERSION}\"/" android/app/build.gradle
             else
               sed -i "/versionCode/a\        versionName \"${APP_VERSION}\"" android/app/build.gradle
             fi
-            echo "---- app/build.gradle defaultConfig ----"
-            grep -A20 'defaultConfig' android/app/build.gradle || true
-          fi
-          if [ -f android/app/build.gradle.kts ]; then
-            sed -i 's/applicationId = .*/applicationId = "com.daftar.roozane"/' android/app/build.gradle.kts || true
-            sed -i "s/versionCode = .*/versionCode = ${APP_VERSION_CODE}/" android/app/build.gradle.kts || true
-            sed -i "s/versionName = .*/versionName = \"${APP_VERSION}\"/" android/app/build.gradle.kts || true
+            grep -A25 'defaultConfig' android/app/build.gradle || true
           fi
 
       - name: Add notification permissions

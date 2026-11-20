@@ -1,4 +1,4 @@
-/* Persist guard: keep data + device role across APK updates */
+/* Persist guard: keep role + local cache; never overwrite fresh Firebase data */
 (function(){
   var ROLE_KEY='daftar-device-role-v2';
   var ROLE_BAK='daftar-device-role-backup';
@@ -12,7 +12,6 @@
     try{localStorage.setItem(key,JSON.stringify(val))}catch(e){}
   }
 
-  /* --- Role: dual write + migrate -- */
   function getSavedRole(){
     try{
       return localStorage.getItem(ROLE_KEY)
@@ -35,41 +34,37 @@
     try{
       if(typeof deviceRole!=='undefined') deviceRole=r;
       if(typeof showRolePicker!=='undefined') showRolePicker=false;
-      if(r==='parent'){
-        if(typeof isParent!=='undefined') isParent=true;
-      }else if(r==='child'){
-        if(typeof isParent!=='undefined') isParent=false;
-      }
+      if(r==='parent'&&typeof isParent!=='undefined') isParent=true;
+      if(r==='child'&&typeof isParent!=='undefined') isParent=false;
     }catch(e){}
   }
 
-  /* --- Data backup -- */
   function backupData(){
     try{
       if(typeof S==='undefined'||!S)return;
-      // never backup completely empty profile over a richer one
-      var cur=readJSON(DATA_BAK);
-      var score=function(x){
-        if(!x)return 0;
-        var n=0;
-        if(x.tasks&&x.tasks.length)n+=x.tasks.length;
-        if(x.days)n+=Object.keys(x.days).length*2;
-        if(x.rewards&&x.rewards.length)n+=x.rewards.length;
-        if(x.healthItems&&x.healthItems.length)n+=x.healthItems.length;
-        if(x.pendingChanges&&x.pendingChanges.length)n+=x.pendingChanges.length;
-        return n;
-      };
-      if(score(S)>=score(cur)) writeJSON(DATA_BAK,S);
-      // also keep primary key in sync
+      // Only backup if we look like we have real data
+      var keys=S.days?Object.keys(S.days).length:0;
+      var tasks=(S.tasks&&S.tasks.length)||0;
+      if(keys===0&&tasks===0)return;
+      writeJSON(DATA_BAK,{
+        name:S.name,tasks:S.tasks,days:S.days,rewards:S.rewards,
+        claims:S.claims,goal:S.goal,parentTasks:S.parentTasks,
+        parentPin:S.parentPin,posBehaviors:S.posBehaviors,
+        negBehaviors:S.negBehaviors,streak:S.streak,
+        lastActive:S.lastActive,pendingChanges:S.pendingChanges,
+        healthItems:S.healthItems
+      });
       writeJSON(DATA_KEY,S);
     }catch(e){}
   }
+
+  // Only restore backup if Firebase has NOT hydrated yet and local is empty
   function restoreIfEmpty(){
     try{
+      if(window.__sarinaHydrated)return; // remote is authority
       if(typeof S==='undefined')return;
-      var has=S.tasks&&S.tasks.length;
-      var days=S.days&&Object.keys(S.days).length;
-      if(has||days)return;
+      var has=(S.tasks&&S.tasks.length)||(S.days&&Object.keys(S.days).length);
+      if(has)return;
       var bak=readJSON(DATA_BAK)||readJSON(DATA_KEY);
       if(!bak)return;
       if((bak.tasks&&bak.tasks.length)||(bak.days&&Object.keys(bak.days).length)){
@@ -86,75 +81,38 @@
           negBehaviors:bak.negBehaviors||S.negBehaviors,
           streak:bak.streak||S.streak,
           lastActive:bak.lastActive||S.lastActive,
-          theme:bak.theme||S.theme,
           pendingChanges:bak.pendingChanges||S.pendingChanges,
           healthItems:bak.healthItems||S.healthItems
         });
-        console.log('persist-guard: restored local backup');
+        console.log('persist-guard: restored local cache (pre-hydrate only)');
       }
     }catch(e){}
   }
 
-  /* --- Guard setDeviceRole -- */
   function wrapSetRole(){
-    if(typeof setDeviceRole!=='function')return;
-    if(setDeviceRole._persistWrapped)return;
+    if(typeof setDeviceRole!=='function'||setDeviceRole._pg)return;
     var orig=setDeviceRole;
     setDeviceRole=function(role){
       persistRole(role);
       return orig.apply(this,arguments);
     };
-    setDeviceRole._persistWrapped=true;
+    setDeviceRole._pg=true;
   }
 
-  /* --- Guard saveProfile: no accidental wipe -- */
-  function wrapSave(){
-    if(typeof saveProfile!=='function')return;
-    if(saveProfile._persistWrapped)return;
-    var orig=saveProfile;
-    saveProfile=function(){
-      try{
-        // if current S lost tasks but backup has them, restore before save
-        if(S&&(!S.tasks||!S.tasks.length)){
-          var bak=readJSON(DATA_BAK);
-          if(bak&&bak.tasks&&bak.tasks.length){
-            S.tasks=bak.tasks;
-          }
-        }
-        backupData();
-      }catch(e){}
-      return orig.apply(this,arguments);
-    };
-    saveProfile._persistWrapped=true;
-  }
-
-  /* --- Guard Firebase remote empty overwrite for critical arrays -- */
-  function wrapRenderBoot(){
-    restoreIfEmpty();
+  function boot(){
     lockRole();
     wrapSetRole();
-    wrapSave();
-  }
-
-  // Run after app.js/app2.js boot
-  function boot(){
-    wrapRenderBoot();
-    // re-apply shortly after app2 boot IIFE
-    setTimeout(function(){
-      wrapRenderBoot();
-      lockRole();
-      // hide role picker permanently if role known
-      if(getSavedRole()&&typeof showRolePicker!=='undefined'){
-        showRolePicker=false;
-      }
-      if(typeof render==='function'){
-        try{render()}catch(e){}
-      }
-    },120);
+    // restore only before firebase hydrate
+    restoreIfEmpty();
     setTimeout(function(){
       lockRole();
-      backupData();
-    },800);
+      if(typeof showRolePicker!=='undefined'&&getSavedRole()) showRolePicker=false;
+    },150);
+    setTimeout(lockRole,500);
+    // backup periodically but never push over remote
+    setInterval(function(){
+      if(window.__sarinaHydrated) backupData();
+    },30000);
   }
 
   if(document.readyState==='loading'){
@@ -162,11 +120,5 @@
   }else{
     boot();
   }
-
-  // Periodic local backup while app is open
-  setInterval(function(){
-    try{backupData()}catch(e){}
-  },30000);
-
-  console.log('persist-guard active');
+  console.log('persist-guard v2 active');
 })();
