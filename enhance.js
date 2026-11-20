@@ -1,6 +1,5 @@
 /* Enhancements: fun hero, calendar, behaviors, health report, 80% party, prizes */
 (function(){
-  // inject missing keyframes if CSS typo
   try{
     var st=document.createElement('style');
     st.textContent='@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}@keyframes twinkle{0%,100%{transform:scale(1);opacity:.6}50%{transform:scale(1.25);opacity:1}}';
@@ -71,10 +70,12 @@
     var mascot=isParent?'👨‍👩‍👧':(typeof dayChar==='function'?dayChar().emoji:'🦄');
     var pct=taskPct(todayKey());
     var stars='⭐'.repeat(Math.min(5,Math.max(1,Math.ceil(pct/20))));
+    // MUST use data-act="view" data-v="..." to match app2.js click handler
+    // view values must be: today, health, report, rewards, parent, settings
     var tabs=[
       {v:'today',icon:'🌟',lab:'امروز'},
       {v:'health',icon:'🥗',lab:'سلامتی'},
-      {v:'reports',icon:'📊',lab:'گزارش'},
+      {v:'report',icon:'📊',lab:'گزارش'},
       {v:'rewards',icon:'🎁',lab:'پاداش'},
       {v:'parent',icon:'💝',lab:'مامان‌بابا'},
       {v:'settings',icon:'⚙️',lab:'تنظیمات'}
@@ -98,7 +99,7 @@
     h+='<div class="tabs fun-tabs" id="mainTabs">';
     tabs.forEach(function(t){
       var sel=view===t.v?'true':'false';
-      h+='<button type="button" data-view="'+t.v+'" aria-selected="'+sel+'">';
+      h+='<button type="button" data-act="view" data-v="'+t.v+'" aria-selected="'+sel+'">';
       h+='<span class="tab-icon">'+t.icon+'</span><span class="tab-lab">'+t.lab+'</span>';
       h+='</button>';
     });
