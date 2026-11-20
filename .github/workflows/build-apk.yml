@@ -24,10 +24,21 @@ jobs:
         run: |
           mkdir -p www
           cp index.html www/index.html
-          for f in app.js app2.js role-hard.js; do
+          for f in app.js app2.js role-hard.js approve-fix.js; do
             if [ -f "$f" ]; then cp "$f" "www/$f"; fi
           done
+          # Restore app.js from base64 if it is broken/placeholder
+          if [ -f app.b64.txt ]; then
+            python3 - <<'PY'
+import base64, pathlib
+b = pathlib.Path('app.b64.txt').read_text().replace('\n','').replace('\r','')
+data = base64.b64decode(b)
+pathlib.Path('www/app.js').write_bytes(data)
+print('restored app.js from b64', len(data))
+PY
+          fi
           ls -la www/
+          wc -c www/app.js || true
 
       - name: Install Capacitor
         run: npm install
