@@ -1,13 +1,10 @@
-/* Enhancements: calendar, behaviors settings, health report, 80% party, prizes */
+/* Enhancements: fun hero, calendar, behaviors, health report, 80% party, prizes */
 (function(){
-  // سقف امتیاز تسک‌ها = تعداد تسک‌های تعریف‌شده
   function taskMax(){return Math.max(1,(S.tasks||[]).length)}
   function taskDone(k){return (dayStats(k).done||0)}
   function taskPct(k){return Math.min(100,Math.round(taskDone(k)/taskMax()*100))}
-  // امتیاز کل روز (تسک + رفتار مثبت − منفی − ازدست‌رفته)
   function dayTotal(k){return score(dayStats(k))}
 
-  /* ---- 80% balloons: based on TASK completion only ---- */
   var celebratedDays={};
   try{celebratedDays=JSON.parse(localStorage.getItem('daftar-celeb-days')||'{}')}catch(e){}
   function saveCeleb(){try{localStorage.setItem('daftar-celeb-days',JSON.stringify(celebratedDays))}catch(e){}}
@@ -53,28 +50,83 @@
     }
   }
 
+  /* ---- Exciting kid hero + tabs ---- */
+  function funGreet(){
+    var h=new Date().getHours();
+    var name=S.name||'سارینا';
+    var msgs;
+    if(h<11) msgs=['صبح بخیر '+name+' ☀️ امروز ستاره‌هات رو جمع کن!','سلام قهرمان صبحگاهی 🦄 آماده ماجراجویی؟'];
+    else if(h<17) msgs=['هی '+name+' 🌈 کارهای امروز چطوره؟','آفرین تا اینجا! ادامه بده ستاره ⭐'];
+    else msgs=['عصر بخیر '+name+' 💜 هنوز وقت ستاره گرفتن هست!','شب نزدیکه؛ کارها رو تموم کن تا جشن بگیریم 🎉'];
+    return msgs[new Date().getDate()%msgs.length];
+  }
+
+  function funHeader(){
+    var mascot=isParent?'👨‍👩‍👧':(typeof dayChar==='function'?dayChar().emoji:'🦄');
+    var pct=taskPct(todayKey());
+    var stars='⭐'.repeat(Math.min(5,Math.max(1,Math.ceil(pct/20))));
+    var tabs=[
+      {v:'today',icon:'🌟',lab:'امروز'},
+      {v:'health',icon:'🥗',lab:'سلامتی'},
+      {v:'reports',icon:'📊',lab:'گزارش'},
+      {v:'rewards',icon:'🎁',lab:'پاداش'},
+      {v:'parent',icon:'💝',lab:'مامان‌بابا'},
+      {v:'settings',icon:'⚙️',lab:'تنظیمات'}
+    ];
+    // hide parent-ish tabs on pure child permanent mode if needed
+    var h='<header class="hero fun-hero">';
+    h+='<div class="sparkle s1">✨</div><div class="sparkle s2">💜</div><div class="sparkle s3">🌸</div>';
+    h+='<div class="hero-top">';
+    h+='<div class="hero-titles">';
+    h+='<div class="hero-badge">'+stars+' باشگاه ستاره‌ها</div>';
+    h+='<h1>دفتر جادویی سارینا <span id="syncDot" class="sync-dot"></span></h1>';
+    h+='<p class="sub">هر کار خوب = یک ستاره بنفش ✨</p>';
+    h+='</div>';
+    h+='<div class="mascot bounce">'+mascot+'</div>';
+    h+='</div>';
+    if(!isParent){
+      h+='<div class="greet fun-greet">'+funGreet()+'</div>';
+    }
+    h+='<div class="name-wrap"><span class="name-star">⭐</span>';
+    h+='<input id="nameIn" class="name" value="'+esc(S.name)+'" '+(isParent?'':'readonly')+'>';
+    h+='</div>';
+    h+='<div class="tabs fun-tabs" id="mainTabs">';
+    tabs.forEach(function(t){
+      var sel=view===t.v?'true':'false';
+      h+='<button type="button" data-view="'+t.v+'" aria-selected="'+sel+'">';
+      h+='<span class="tab-icon">'+t.icon+'</span><span class="tab-lab">'+t.lab+'</span>';
+      h+='</button>';
+    });
+    h+='</div></header>';
+    return h;
+  }
+
+  if(typeof header==='function'){
+    header=funHeader;
+  }
+
   /* ---- Pretty calendar datebar ---- */
   function prettyDatebar(){
     var k=curKey, isToday=k===todayKey();
     var rest=fmtFull.format(fromKey(k));
     var done=taskDone(k), max=taskMax(), pct=taskPct(k), total=dayTotal(k);
-    return '<div class="cal-card">'
+    var cheer=pct>=80?'🎈 عالیه!':pct>=50?'💪 ادامه بده!':'🌱 شروع کن!';
+    return '<div class="cal-card fun-cal">'
       +'<button type="button" class="cal-nav" data-act="day" data-n="-1" aria-label="روز قبل">›</button>'
       +'<div class="cal-mid">'
       +'<div class="cal-emoji">'+(isToday?'🌟':'📅')+'</div>'
       +'<div class="cal-date">'+esc(rest)+'</div>'
-      +(isToday?'<span class="cal-badge">امروز</span>':'')
+      +(isToday?'<span class="cal-badge">'+cheer+' امروز</span>':'')
       +'<div class="cal-points">تسک‌ها: <b>'+fa(done)+'</b> از <b>'+fa(max)+'</b>'
       +' <span class="cal-pct">('+fa(pct)+'٪)</span></div>'
-      +'<div class="cal-points" style="margin-top:2px">امتیاز کل امروز: <b>'+fa(total)+'</b>'
-      +(total>max?' <span class="cal-pct">(با رفتارها)</span>':'')+'</div>'
+      +'<div class="cal-points" style="margin-top:2px">امتیاز کل: <b>'+fa(total)+'</b>'
+      +(total>max?' <span class="cal-pct">(+ رفتارها)</span>':'')+'</div>'
       +'<div class="cal-bar"><i style="width:'+pct+'%"></i></div>'
       +'</div>'
       +'<button type="button" class="cal-nav" data-act="day" data-n="1"'+(isToday?' disabled':'')+' aria-label="روز بعد">‹</button>'
       +'</div>';
   }
 
-  /* ---- Prizes panel ---- */
   function prizesPanel(){
     var today=todayKey();
     var weekKeys=[];for(var i=0;i<7;i++)weekKeys.push(addDays(today,-i));
@@ -102,7 +154,6 @@
     if(monthClaims.length)h+='<div class="pb-list">'+fa(monthClaims.length)+' جایزه</div>';
     else h+='<div class="pb-empty">به جمع ستاره‌ها ادامه بده</div>';
     h+='</div></div>';
-
     h+='<div class="badge-row">';
     if(taskPct(today)>=80)h+='<span class="ach">🎈 قهرمان امروز</span>';
     if((S.streak||0)>=3)h+='<span class="ach">🔥 '+fa(S.streak)+' روز پشت‌سرهم</span>';
@@ -180,8 +231,8 @@
       var html=_reportView();
       html+=healthReportBlock();
       html+='<section class="card"><div class="card-h"><h2>🎯 ظرفیت امتیاز روزانه</h2></div>';
-      html+='<p>تعداد تسک فعال: <b>'+fa(S.tasks.length)+'</b> ← حداکثر امتیاز از <b>تسک‌ها</b> در هر روز: <b>'+fa(taskMax())+'</b></p>';
-      html+='<p class="muted">رفتارهای مثبت امتیاز جداگانه اضافه می‌کنند و سقف جدا ندارند. با افزودن/حذف تسک، سقف تسک‌ها به‌روز می‌شود.</p></section>';
+      html+='<p>تعداد تسک فعال: <b>'+fa(S.tasks.length)+'</b> ← حداکثر امتیاز از <b>تسک‌ها</b>: <b>'+fa(taskMax())+'</b></p>';
+      html+='<p class="muted">رفتارهای مثبت امتیاز جداگانه می‌دهند. با افزودن/حذف تسک، سقف به‌روز می‌شود.</p></section>';
       return html;
     };
   }
