@@ -29,21 +29,16 @@ jobs:
           set -e
           mkdir -p www
           cp index.html www/index.html
-          for f in app2.js role-hard.js approve-fix.js enhance.js; do
+          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js; do
             if [ -f "$f" ]; then cp "$f" "www/$f"; echo "copied $f"; fi
           done
-
-          # Restore good app.js blob (known-good SHA from history)
           BLOB_SHA="25a039f0a5ae4cee254e40e37f7a4445ab664e47"
           gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${BLOB_SHA}" --jq .content | base64 -d > www/app.js
           echo "app.js size: $(wc -c < www/app.js)"
           if [ "$(wc -c < www/app.js)" -lt 10000 ]; then
-            echo "app.js too small, trying git show fallback"
-            git fetch --unshallow || true
-            git show 04f0460ac405dbd658921befc41098ff60e2cfb6:app.js > www/app.js || true
+            echo "app.js too small"
+            exit 1
           fi
-          echo "final app.js: $(wc -c < www/app.js)"
-          head -c 80 www/app.js; echo
           ls -la www/
 
       - name: Install Capacitor
