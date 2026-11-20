@@ -1,10 +1,13 @@
 /* Enhancements: calendar, behaviors settings, health report, 80% party, prizes */
 (function(){
-  function maxDayPoints(){return Math.max(1,(S.tasks||[]).length)}
-  function dayEarned(k){var st=dayStats(k);return Math.max(0,(st.done||0)+(st.pos||0))}
-  function dayPct(k){return Math.min(100,Math.round(dayEarned(k)/maxDayPoints()*100))}
+  // سقف امتیاز تسک‌ها = تعداد تسک‌های تعریف‌شده
+  function taskMax(){return Math.max(1,(S.tasks||[]).length)}
+  function taskDone(k){return (dayStats(k).done||0)}
+  function taskPct(k){return Math.min(100,Math.round(taskDone(k)/taskMax()*100))}
+  // امتیاز کل روز (تسک + رفتار مثبت − منفی − ازدست‌رفته)
+  function dayTotal(k){return score(dayStats(k))}
 
-  /* ---- 80% balloons celebration ---- */
+  /* ---- 80% balloons: based on TASK completion only ---- */
   var celebratedDays={};
   try{celebratedDays=JSON.parse(localStorage.getItem('daftar-celeb-days')||'{}')}catch(e){}
   function saveCeleb(){try{localStorage.setItem('daftar-celeb-days',JSON.stringify(celebratedDays))}catch(e){}}
@@ -43,39 +46,40 @@
   function checkDayParty(){
     var k=todayKey();
     if(celebratedDays[k])return;
-    if(dayPct(k)>=80){
+    if(taskPct(k)>=80){
       celebratedDays[k]=1;
       saveCeleb();
-      balloonParty('🎈 وای چه عالی! بیش از ۸۰٪ امتیاز امروز گرفته شد!');
+      balloonParty('🎈 وای چه عالی! بیش از ۸۰٪ تسک‌های امروز انجام شد!');
     }
   }
 
   /* ---- Pretty calendar datebar ---- */
-  function prettyDatebar(html){
+  function prettyDatebar(){
     var k=curKey, isToday=k===todayKey();
-    var d=fromKey(k);
-    var wd=fmtFull.format(d).split(' ')[0]||'';
-    var rest=fmtFull.format(d);
+    var rest=fmtFull.format(fromKey(k));
+    var done=taskDone(k), max=taskMax(), pct=taskPct(k), total=dayTotal(k);
     return '<div class="cal-card">'
       +'<button type="button" class="cal-nav" data-act="day" data-n="-1" aria-label="روز قبل">›</button>'
       +'<div class="cal-mid">'
       +'<div class="cal-emoji">'+(isToday?'🌟':'📅')+'</div>'
       +'<div class="cal-date">'+esc(rest)+'</div>'
       +(isToday?'<span class="cal-badge">امروز</span>':'')
-      +'<div class="cal-points">امتیاز امروز: <b>'+fa(dayEarned(k))+'</b> از <b>'+fa(maxDayPoints())+'</b>'
-      +' <span class="cal-pct">('+fa(dayPct(k))+'٪)</span></div>'
-      +'<div class="cal-bar"><i style="width:'+dayPct(k)+'%"></i></div>'
+      +'<div class="cal-points">تسک‌ها: <b>'+fa(done)+'</b> از <b>'+fa(max)+'</b>'
+      +' <span class="cal-pct">('+fa(pct)+'٪)</span></div>'
+      +'<div class="cal-points" style="margin-top:2px">امتیاز کل امروز: <b>'+fa(total)+'</b>'
+      +(total>max?' <span class="cal-pct">(با رفتارها)</span>':'')+'</div>'
+      +'<div class="cal-bar"><i style="width:'+pct+'%"></i></div>'
       +'</div>'
       +'<button type="button" class="cal-nav" data-act="day" data-n="1"'+(isToday?' disabled':'')+' aria-label="روز بعد">‹</button>'
       +'</div>';
   }
 
-  /* ---- Prizes panel (daily / weekly / monthly) ---- */
+  /* ---- Prizes panel ---- */
   function prizesPanel(){
     var today=todayKey();
     var weekKeys=[];for(var i=0;i<7;i++)weekKeys.push(addDays(today,-i));
     var monthKeys=[];for(var m=0;m<30;m++)monthKeys.push(addDays(today,-m));
-    var dayPts=dayEarned(today);
+    var dayPts=dayTotal(today);
     var weekPts=0;weekKeys.forEach(function(k){weekPts+=score(dayStats(k))});
     var monthPts=0;monthKeys.forEach(function(k){monthPts+=score(dayStats(k))});
     var claims=S.claims||[];
@@ -95,13 +99,12 @@
     else h+='<div class="pb-empty">جایزه هفتگی در راه است</div>';
     h+='</div>';
     h+='<div class="prize-box month"><div class="pb-icon">👑</div><div class="pb-label">۳۰ روز</div><div class="pb-val">'+fa(monthPts)+' امتیاز</div>';
-    if(monthClaims.length)h+='<div class="pb-list">'+weekClaims.length+' جایزه هفتگی / '+fa(monthClaims.length)+' کل</div>';
+    if(monthClaims.length)h+='<div class="pb-list">'+fa(monthClaims.length)+' جایزه</div>';
     else h+='<div class="pb-empty">به جمع ستاره‌ها ادامه بده</div>';
     h+='</div></div>';
 
-    // milestone badges
     h+='<div class="badge-row">';
-    if(dayPct(today)>=80)h+='<span class="ach">🎈 قهرمان امروز</span>';
+    if(taskPct(today)>=80)h+='<span class="ach">🎈 قهرمان امروز</span>';
     if((S.streak||0)>=3)h+='<span class="ach">🔥 '+fa(S.streak)+' روز پشت‌سرهم</span>';
     if(weekPts>=(S.goal||15))h+='<span class="ach">🎯 هدف هفته</span>';
     if(monthPts>=50)h+='<span class="ach">💎 ستاره ماه</span>';
@@ -109,7 +112,6 @@
     return h;
   }
 
-  /* ---- Health consumption in report ---- */
   function healthReportBlock(){
     var items=getHealthItems();
     if(!items.length)return '';
@@ -117,17 +119,12 @@
     h+='<p class="muted">چند بار در بازه‌های اخیر ثبت شده</p>';
     items.forEach(function(it){
       var count30=0,count60=0;
-      // approximate: if lastDate within range, count at least 1; better scan if we stored history - we only have lastDate
-      // Use claims-like: for now show last + cooldown estimate
       if(it.lastDate){
         var daysAgo=Math.ceil((fromKey(todayKey())-fromKey(it.lastDate))/(24*60*60*1000));
-        if(daysAgo<=30)count30=1;
-        if(daysAgo<=60)count60=1;
-        // estimate more from cooldown cycles in 60 days
         var cd=it.cooldownDays||7;
         if(daysAgo<=60){
           count60=Math.max(1,Math.floor((60-daysAgo)/cd)+1);
-          count30=Math.max(daysAgo<=30?1:0,Math.floor((Math.min(30,60-daysAgo))/cd)+(daysAgo<=30?1:0));
+          count30=daysAgo<=30?Math.max(1,Math.floor((30-daysAgo)/cd)+1):0;
         }
       }
       h+='<div class="health-report-row">';
@@ -140,7 +137,6 @@
     return h;
   }
 
-  /* ---- Behaviors management in settings ---- */
   function behaviorsSettingsBlock(){
     var pos=getPosBehaviors();
     var neg=getNegBehaviors();
@@ -161,17 +157,13 @@
     return h;
   }
 
-  /* ---- Patch views ---- */
   var _todayView = typeof todayView==='function' ? todayView : null;
   if(_todayView){
     todayView=function(){
       var html=_todayView();
-      // replace old datebar with pretty calendar
       html=html.replace(/<div class="datebar">[\s\S]*?<\/div>/, prettyDatebar());
-      // inject prizes after level/health area - after first week box or stats
       var prizes=prizesPanel();
       if(html.indexOf('prizes-card')<0){
-        // insert after week box if present
         if(html.indexOf('class="week"')>=0){
           html=html.replace(/(<div class="week">[\s\S]*?<\/div>)/, function(m){return m+prizes});
         }else{
@@ -187,10 +179,9 @@
     reportView=function(){
       var html=_reportView();
       html+=healthReportBlock();
-      // daily max note
       html+='<section class="card"><div class="card-h"><h2>🎯 ظرفیت امتیاز روزانه</h2></div>';
-      html+='<p>با <b>'+fa(S.tasks.length)+'</b> تسک فعال، حداکثر امتیاز از تسک‌ها در هر روز: <b>'+fa(maxDayPoints())+'</b></p>';
-      html+='<p class="muted">با افزودن یا حذف تسک در تنظیمات، این عدد به‌روز می‌شود.</p></section>';
+      html+='<p>تعداد تسک فعال: <b>'+fa(S.tasks.length)+'</b> ← حداکثر امتیاز از <b>تسک‌ها</b> در هر روز: <b>'+fa(taskMax())+'</b></p>';
+      html+='<p class="muted">رفتارهای مثبت امتیاز جداگانه اضافه می‌کنند و سقف جدا ندارند. با افزودن/حذف تسک، سقف تسک‌ها به‌روز می‌شود.</p></section>';
       return html;
     };
   }
@@ -201,7 +192,6 @@
       var html=_settingsView();
       if(deviceRole==='child')return html;
       if(!isParent)return html;
-      // inject behaviors management before rewards or at end before pin
       if(html.indexOf('مدیریت رفتار')<0){
         html=html.replace(/(<section class="card"><div class="card-h"><h2>🎁)/, behaviorsSettingsBlock()+'$1');
         if(html.indexOf('مدیریت رفتار')<0) html+=behaviorsSettingsBlock();
@@ -210,7 +200,6 @@
     };
   }
 
-  /* ---- Event handlers for behaviors ---- */
   document.addEventListener('click',function(e){
     var t=e.target.closest('[data-act]');
     if(!t)return;
@@ -253,7 +242,6 @@
     }
   },true);
 
-  /* ---- Hook after mark / render for party ---- */
   var _render = typeof render==='function' ? render : null;
   if(_render){
     render=function(){
@@ -262,7 +250,6 @@
     };
   }
 
-  // initial check
   setTimeout(function(){try{checkDayParty()}catch(e){}},600);
   console.log('enhance.js loaded');
 })();
