@@ -79,6 +79,38 @@ ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 .health-chip .h-emoji{font-size:28px}.health-chip .h-days{font-size:11px;font-weight:800;color:var(--accent-deep)}
 .health-item{padding:14px;border:1.5px solid var(--line);border-radius:16px;margin-top:10px}
 .hi-top{display:flex;align-items:center;gap:12px}.hi-emoji{font-size:36px}.hi-countdown{text-align:center;padding:8px;background:var(--accent-soft);border-radius:12px}.hi-countdown span{font-size:28px;font-weight:800;color:var(--accent-deep);display:block}
+/* Calendar card */
+.cal-card{display:grid;grid-template-columns:48px 1fr 48px;align-items:center;gap:8px;background:linear-gradient(145deg,#F3ECFF,#FFEAF4);border:2px solid var(--line);border-radius:24px;padding:14px 10px;box-shadow:var(--shadow)}
+.cal-nav{width:44px;height:44px;border-radius:50%;border:2px solid var(--accent);background:#fff;color:var(--accent-deep);font-size:22px;font-weight:800}
+.cal-nav:disabled{opacity:.35}
+.cal-mid{text-align:center}
+.cal-emoji{font-size:28px;line-height:1}
+.cal-date{font-weight:800;font-size:14px;margin-top:4px}
+.cal-badge{display:inline-block;background:var(--accent);color:#fff;border-radius:99px;padding:2px 12px;font-size:11px;font-weight:800;margin-top:4px}
+.cal-points{font-size:12.5px;margin-top:8px;color:var(--ink)}
+.cal-points b{color:var(--accent-deep)}
+.cal-pct{color:var(--pink);font-weight:800}
+.cal-bar{height:10px;border-radius:99px;background:#fff;overflow:hidden;margin-top:6px;border:1px solid var(--line)}
+.cal-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--pink),var(--gold));border-radius:99px}
+/* Prizes */
+.prizes-card{background:linear-gradient(180deg,#fff,#FBF7FF)}
+.prize-tabs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.prize-box{background:#fff;border:2px solid var(--line);border-radius:18px;padding:12px 8px;text-align:center}
+.prize-box.day{border-color:#FFC94A}.prize-box.week{border-color:#9B6DFF}.prize-box.month{border-color:#FF8BC2}
+.pb-icon{font-size:26px}.pb-label{font-size:12px;font-weight:800;color:var(--muted)}.pb-val{font-size:15px;font-weight:800;color:var(--accent-deep);margin-top:2px}
+.pb-list{font-size:11px;margin-top:6px;color:var(--ink)}.pb-empty{font-size:11px;color:var(--muted);margin-top:6px}
+.badge-row{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:4px}
+.ach{background:var(--accent-soft);color:var(--accent-deep);border-radius:99px;padding:4px 12px;font-size:12px;font-weight:800}
+/* Behaviors chips edit */
+.chip-edit{display:inline-flex;align-items:center;gap:4px;border:1.5px solid var(--line);border-radius:99px;padding:4px 10px;font-size:13px;margin:3px}
+/* Health report */
+.health-report-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+.hr-emoji{font-size:28px}.hr-info strong{display:block}.hr-info small{color:var(--muted)}
+/* Balloons */
+.balloon-layer{position:fixed;inset:0;pointer-events:none;z-index:400;overflow:hidden}
+.balloon{position:absolute;bottom:-80px;width:36px;height:44px;border-radius:50% 50% 50% 50%;animation:rise linear forwards}
+.balloon:after{content:'';position:absolute;left:50%;bottom:-12px;width:2px;height:14px;background:rgba(0,0,0,.15)}
+@keyframes rise{0%{transform:translateY(0) scale(1);opacity:1}70%{opacity:1}100%{transform:translateY(-110vh) scale(1.2);opacity:0}}
 </style>
 </head>
 <body>
@@ -89,5 +121,6 @@ ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 <script src="app2.js"></script>
 <script src="role-hard.js"></script>
 <script src="approve-fix.js"></script>
+<script src="enhance.js"></script>
 </body>
 </html>

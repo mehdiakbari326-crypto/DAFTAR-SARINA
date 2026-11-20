@@ -26,7 +26,7 @@ jobs:
         run: |
           mkdir -p www
           cp index.html www/index.html
-          for f in app2.js role-hard.js approve-fix.js; do
+          for f in app2.js role-hard.js approve-fix.js enhance.js; do
             if [ -f "$f" ]; then cp "$f" "www/$f"; fi
           done
 
