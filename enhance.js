@@ -1,5 +1,12 @@
 /* Enhancements: fun hero, calendar, behaviors, health report, 80% party, prizes */
 (function(){
+  // inject missing keyframes if CSS typo
+  try{
+    var st=document.createElement('style');
+    st.textContent='@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}@keyframes twinkle{0%,100%{transform:scale(1);opacity:.6}50%{transform:scale(1.25);opacity:1}}';
+    document.head.appendChild(st);
+  }catch(e){}
+
   function taskMax(){return Math.max(1,(S.tasks||[]).length)}
   function taskDone(k){return (dayStats(k).done||0)}
   function taskPct(k){return Math.min(100,Math.round(taskDone(k)/taskMax()*100))}
@@ -50,7 +57,6 @@
     }
   }
 
-  /* ---- Exciting kid hero + tabs ---- */
   function funGreet(){
     var h=new Date().getHours();
     var name=S.name||'سارینا';
@@ -73,7 +79,6 @@
       {v:'parent',icon:'💝',lab:'مامان‌بابا'},
       {v:'settings',icon:'⚙️',lab:'تنظیمات'}
     ];
-    // hide parent-ish tabs on pure child permanent mode if needed
     var h='<header class="hero fun-hero">';
     h+='<div class="sparkle s1">✨</div><div class="sparkle s2">💜</div><div class="sparkle s3">🌸</div>';
     h+='<div class="hero-top">';
@@ -105,7 +110,6 @@
     header=funHeader;
   }
 
-  /* ---- Pretty calendar datebar ---- */
   function prettyDatebar(){
     var k=curKey, isToday=k===todayKey();
     var rest=fmtFull.format(fromKey(k));
