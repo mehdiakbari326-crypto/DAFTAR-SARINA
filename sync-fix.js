@@ -1,12 +1,28 @@
-/* Sync v5: always apply Firebase on open; never ignore richer remote */
+/* Sync v6: real connection status, hard pull from Firebase, diagnostics */
 (function(){
   var THEME_KEY='daftar-theme-local';
+  var PATH='family/sarina';
   var hydrated=false;
   var writing=false;
   var pushTimer=null;
   var lastSig='';
-  var localUpdatedAt=0;
-  var lastPull=0;
+  var reallyOnline=false;
+
+  function getDb(){
+    try{
+      if(typeof db!=='undefined'&&db) return db;
+      if(typeof firebase!=='undefined'&&firebase.database){
+        return firebase.database();
+      }
+    }catch(e){}
+    return null;
+  }
+  function getPath(){
+    try{
+      if(typeof FAMILY_PATH==='string'&&FAMILY_PATH) return FAMILY_PATH;
+    }catch(e){}
+    return PATH;
+  }
 
   function loadLocalTheme(){
     try{return localStorage.getItem(THEME_KEY)||null}catch(e){return null}
@@ -20,6 +36,34 @@
       S.theme=t;
       if(typeof applyTheme==='function')applyTheme();
     }
+  }
+
+  function toast(msg){
+    try{
+      if(typeof showToast==='function'){showToast(msg);return;}
+    }catch(e){}
+    try{
+      var el=document.createElement('div');
+      el.className='toast';
+      el.textContent=msg;
+      document.body.appendChild(el);
+      setTimeout(function(){try{el.remove()}catch(e){}},2500);
+    }catch(e){try{alert(msg)}catch(x){}}
+  }
+
+  function setDot(online){
+    reallyOnline=!!online;
+    try{
+      if(typeof syncStatus!=='undefined'){
+        syncStatus=online?'online':'offline';
+      }
+      if(typeof updateSyncDot==='function') updateSyncDot();
+      // also force-paint dots in case updateSyncDot is stale
+      document.querySelectorAll('.sync-dot').forEach(function(d){
+        d.classList.toggle('on', !!online);
+        d.classList.toggle('off', !online);
+      });
+    }catch(e){}
   }
 
   function sharedFrom(Sref){
@@ -54,132 +98,143 @@
 
   function applyRemote(r){
     if(!r||typeof r!=='object')return false;
-    if(r.name!=null) S.name=r.name;
-    if(r.tasks!==undefined) S.tasks=Array.isArray(r.tasks)?r.tasks:[];
-    if(r.days!==undefined) S.days=r.days&&typeof r.days==='object'?r.days:{};
-    if(r.rewards!==undefined) S.rewards=Array.isArray(r.rewards)?r.rewards:[];
-    if(r.claims!==undefined) S.claims=Array.isArray(r.claims)?r.claims:[];
-    if(r.goal!==undefined) S.goal=r.goal||15;
-    if(r.parentTasks!==undefined) S.parentTasks=Array.isArray(r.parentTasks)?r.parentTasks:[];
-    if(r.parentPin!==undefined) S.parentPin=r.parentPin||'1234';
-    if(r.posBehaviors!==undefined) S.posBehaviors=Array.isArray(r.posBehaviors)?r.posBehaviors:[];
-    if(r.negBehaviors!==undefined) S.negBehaviors=Array.isArray(r.negBehaviors)?r.negBehaviors:[];
-    if(r.streak!==undefined) S.streak=r.streak||0;
-    if(r.lastActive!==undefined) S.lastActive=r.lastActive||'';
-    if(r.pendingChanges!==undefined) S.pendingChanges=Array.isArray(r.pendingChanges)?r.pendingChanges:[];
-    if(r.healthItems!==undefined) S.healthItems=Array.isArray(r.healthItems)?r.healthItems:[];
+    // HARD replace shared fields from server
+    S.name = r.name!=null ? r.name : S.name;
+    S.tasks = Array.isArray(r.tasks) ? r.tasks : [];
+    S.days = (r.days && typeof r.days==='object') ? r.days : {};
+    S.rewards = Array.isArray(r.rewards) ? r.rewards : [];
+    S.claims = Array.isArray(r.claims) ? r.claims : [];
+    S.goal = (r.goal!=null) ? r.goal : 15;
+    S.parentTasks = Array.isArray(r.parentTasks) ? r.parentTasks : [];
+    S.parentPin = r.parentPin || '1234';
+    S.posBehaviors = Array.isArray(r.posBehaviors) ? r.posBehaviors : [];
+    S.negBehaviors = Array.isArray(r.negBehaviors) ? r.negBehaviors : [];
+    S.streak = r.streak || 0;
+    S.lastActive = r.lastActive || '';
+    S.pendingChanges = Array.isArray(r.pendingChanges) ? r.pendingChanges : [];
+    S.healthItems = Array.isArray(r.healthItems) ? r.healthItems : [];
     applyLocalTheme();
+    try{
+      // write local cache AFTER server apply
+      localStorage.setItem('daftar-sarina-v9', JSON.stringify(S));
+    }catch(e){}
     try{if(typeof lsSave==='function')lsSave()}catch(e){}
     return true;
   }
 
-  function setOnline(ok){
-    try{
-      if(typeof syncStatus!=='undefined'){
-        syncStatus=ok?'online':'offline';
-        if(typeof updateSyncDot==='function')updateSyncDot();
-      }
-    }catch(e){}
+  function summarize(r){
+    if(!r)return 'خالی';
+    var h=(r.healthItems&&r.healthItems.length)||0;
+    var t=(r.tasks&&r.tasks.length)||0;
+    var d=r.days?Object.keys(r.days).length:0;
+    var rw=(r.rewards&&r.rewards.length)||0;
+    return 'تسک '+t+' | سلامتی '+h+' | روز '+d+' | پاداش '+rw;
   }
 
   function pullRemote(showMsg){
-    if(typeof db==='undefined'||!db){
-      setOnline(false);
-      if(showMsg&&typeof showToast==='function')showToast('اتصال ابر برقرار نیست');
+    var database=getDb();
+    if(!database){
+      setDot(false);
+      if(showMsg) toast('Firebase وصل نیست');
       return Promise.resolve(false);
     }
-    return db.ref(FAMILY_PATH).once('value').then(function(snap){
+    var path=getPath();
+    return database.ref(path).once('value').then(function(snap){
       var r=snap.val();
-      setOnline(true);
-      lastPull=Date.now();
+      setDot(true);
       if(!r){
-        if(showMsg&&typeof showToast==='function')showToast('ابری خالی است');
+        if(showMsg) toast('ابر خالی است');
+        hydrated=true;
+        window.__sarinaHydrated=true;
         return false;
       }
-      var s=sigOf(r);
-      var changed=(s!==lastSig);
-      lastSig=s;
+      var before=sigOf({healthItems:S.healthItems,days:S.days,tasks:S.tasks,rewards:S.rewards,goal:S.goal});
       applyRemote(r);
+      lastSig=sigOf(r);
       hydrated=true;
       window.__sarinaHydrated=true;
-      if(changed){
-        try{if(typeof render==='function')render()}catch(e){}
+      try{if(typeof render==='function')render()}catch(e){console.log('render after pull',e)}
+      var after=sigOf({healthItems:S.healthItems,days:S.days,tasks:S.tasks,rewards:S.rewards,goal:S.goal});
+      if(showMsg){
+        toast('از ابر: '+summarize(r)+(before!==after?' ✓':' (بدون تغییر)'));
       }
-      if(showMsg&&typeof showToast==='function'){
-        showToast(changed?'همگام شد ✓':'قبلاً همگام بود');
-      }
-      return changed;
+      return true;
     }).catch(function(err){
       console.log('pull error',err);
-      setOnline(false);
-      if(showMsg&&typeof showToast==='function')showToast('خطا در دریافت از ابر');
+      setDot(false);
+      if(showMsg) toast('خطای ابر: '+(err&&err.message?err.message:'نامشخص'));
       return false;
     });
   }
 
   function pushNow(force){
-    if(!hydrated&&!force){
-      console.log('sync: skip push until hydrated');
-      return;
-    }
-    if(typeof db==='undefined'||!db){
-      setOnline(false);
+    if(!hydrated&&!force)return;
+    var database=getDb();
+    if(!database){
+      setDot(false);
       try{if(typeof lsSave==='function')lsSave()}catch(e){}
       return;
     }
     var payload=sharedFrom(S);
     writing=true;
     if(typeof ignoreRemote!=='undefined') ignoreRemote=true;
-    localUpdatedAt=payload._updatedAt;
-    db.ref(FAMILY_PATH).update(payload).then(function(){
+    database.ref(getPath()).update(payload).then(function(){
       writing=false;
       lastSig=sigOf(payload);
       setTimeout(function(){
         if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
-      },1000);
-      setOnline(true);
+      },1200);
+      setDot(true);
       try{if(typeof lsSave==='function')lsSave()}catch(e){}
-      console.log('sync: pushed',payload._updatedAt);
     }).catch(function(err){
       writing=false;
       if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
-      setOnline(false);
-      console.log('sync push error',err);
+      setDot(false);
+      console.log('push error',err);
     });
   }
 
   function schedulePush(){
     try{if(typeof lsSave==='function')lsSave()}catch(e){}
     if(S&&S.theme) saveLocalTheme(S.theme);
-    localUpdatedAt=Date.now();
     if(pushTimer) clearTimeout(pushTimer);
-    pushTimer=setTimeout(function(){pushNow(false)},600);
+    pushTimer=setTimeout(function(){pushNow(false)},700);
   }
 
-  // Override save — always update(), never set()
+  // Override globals
   saveProfile=function(){ schedulePush(); };
-  startFirebaseSync=function(){ setOnline(!!(typeof db!=='undefined'&&db)); };
+  startFirebaseSync=function(){ /* disabled: v6 owns sync */ };
+
+  function watchConnection(){
+    var database=getDb();
+    if(!database)return;
+    try{
+      database.ref('.info/connected').on('value',function(snap){
+        setDot(!!snap.val());
+      });
+    }catch(e){}
+  }
 
   function attach(){
-    if(typeof db==='undefined'||!db)return false;
-    if(db._syncV5)return true;
-    db._syncV5=true;
+    var database=getDb();
+    if(!database)return false;
+    if(database._syncV6)return true;
+    database._syncV6=true;
 
-    try{ db.ref(FAMILY_PATH).off(); }catch(e){}
+    try{ database.ref(getPath()).off(); }catch(e){}
+    watchConnection();
 
-    // ALWAYS take server data first
-    pullRemote(false).then(function(changed){
-      hydrated=true;
-      window.__sarinaHydrated=true;
-      // If cloud empty and local has data, seed once
-      if(!lastSig){
-        var hasLocal=(S.tasks&&S.tasks.length)||(S.healthItems&&S.healthItems.length)||(S.days&&Object.keys(S.days).length);
+    // Hard pull on start
+    pullRemote(false).then(function(ok){
+      if(!ok){
+        // seed only if cloud empty and local has data
+        var hasLocal=(S.tasks&&S.tasks.length)||(S.healthItems&&S.healthItems.some(function(x){return x.lastDate;}));
         if(hasLocal) pushNow(true);
       }
       try{if(typeof render==='function')render()}catch(e){}
     });
 
-    db.ref(FAMILY_PATH).on('value',function(snap){
+    database.ref(getPath()).on('value',function(snap){
       if(writing)return;
       if(typeof ignoreRemote!=='undefined'&&ignoreRemote)return;
       var r=snap.val();
@@ -190,12 +245,10 @@
       applyRemote(r);
       hydrated=true;
       window.__sarinaHydrated=true;
-      setOnline(true);
       try{if(typeof render==='function')render()}catch(e){}
-      console.log('sync: live update applied');
     },function(err){
-      console.log('sync listen error',err);
-      setOnline(false);
+      console.log('listen error',err);
+      setDot(false);
     });
 
     return true;
@@ -213,26 +266,28 @@
     if(a==='force-sync'){
       e.preventDefault();
       e.stopPropagation();
+      toast('در حال دریافت...');
       pullRemote(true);
     }
   },true);
 
-  // Show sync button on home for parents
+  // Inject visible sync button
+  function injectSyncBtn(html){
+    if(!html||html.indexOf('data-act="force-sync"')>=0)return html;
+    var bar='<div style="display:flex;gap:8px;justify-content:center;margin:6px 0 10px">';
+    bar+='<button type="button" class="btn" data-act="force-sync" style="width:auto;min-width:60%;background:linear-gradient(90deg,#6B3FBF,#9B6DFF)">☁️ همگام‌سازی با ابر</button>';
+    bar+='</div>';
+    return html.replace(/(<section class="card")/, bar+'$1');
+  }
+
   var _todayView=typeof todayView==='function'?todayView:null;
   if(_todayView){
     todayView=function(){
       var html=_todayView();
       try{
         if(typeof deviceRole!=='undefined'&&deviceRole==='child')return html;
-        if(typeof isParent!=='undefined'&&!isParent)return html;
       }catch(e){}
-      if(html.indexOf('force-sync')>=0)return html;
-      var bar='<div style="display:flex;gap:8px;justify-content:center;margin:4px 0 8px">';
-      bar+='<button type="button" class="ghost" data-act="force-sync" style="font-weight:800">☁️ همگام‌سازی با ابر</button>';
-      bar+='</div>';
-      // inject after hero / before first card
-      html=html.replace(/(<section class="card")/, bar+'$1');
-      return html;
+      return injectSyncBtn(html);
     };
   }
 
@@ -254,31 +309,32 @@
     (function waitDb(){
       tries++;
       if(attach())return;
-      if(tries<80) setTimeout(waitDb,200);
-      else{hydrated=true;window.__sarinaHydrated=true;setOnline(false);}
+      if(tries<100) setTimeout(waitDb,200);
+      else setDot(false);
     })();
 
-    // Pull every 3s
     setInterval(function(){
       if(writing)return;
-      if(Date.now()-lastPull<2500)return;
       pullRemote(false);
-    },3000);
+    },4000);
 
-    // When app comes to foreground
     document.addEventListener('visibilitychange',function(){
       if(document.visibilityState==='visible'){
-        setTimeout(function(){pullRemote(false)},300);
+        setTimeout(function(){pullRemote(false)},200);
       }
     });
   }
 
   if(document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded',function(){setTimeout(boot,150)});
+    document.addEventListener('DOMContentLoaded',function(){setTimeout(boot,100)});
   }else{
-    setTimeout(boot,150);
+    setTimeout(boot,100);
   }
 
-  window.__sarinaSync={forcePush:function(){pushNow(true)},pull:function(){return pullRemote(true)},hydrated:function(){return hydrated}};
-  console.log('sync-fix v5 loaded');
+  window.__sarinaSync={
+    pull:function(){return pullRemote(true)},
+    push:function(){pushNow(true)},
+    online:function(){return reallyOnline}
+  };
+  console.log('sync-fix v6 loaded');
 })();
