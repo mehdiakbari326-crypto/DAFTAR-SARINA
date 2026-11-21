@@ -48,15 +48,9 @@ jobs:
           BLOB_SHA="25a039f0a5ae4cee254e40e37f7a4445ab664e47"
           gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${BLOB_SHA}" --jq .content | base64 -d > www/app.js
           test "$(wc -c < www/app.js)" -gt 10000
-          echo "window.APP_VERSION='${APP_VERSION}';" > www/version.js
-          echo "window.APP_VERSION_CODE=${APP_VERSION_CODE};" >> www/version.js
-          echo "(function(){function p(){try{var v=window.APP_VERSION||'?';document.querySelectorAll('.rule').forEach(function(el){if(el&&el.textContent.indexOf('v')<0){el.textContent=el.textContent+' • v'+v}});var h1=document.querySelector('.hero h1,.fun-hero h1');if(h1&&!document.getElementById('verBadge')){var b=document.createElement('span');b.id='verBadge';b.textContent='v'+v;b.style.cssText='margin-right:8px;font-size:11px;opacity:.9;background:rgba(255,255,255,.25);padding:2px 8px;border-radius:99px;font-weight:800';h1.appendChild(b);}}catch(e){}}setTimeout(p,500);setTimeout(p,1500);setInterval(p,4000);})();" >> www/version.js
-          if ! grep -q 'version.js' www/index.html; then
-            sed -i 's|</body>|<script src="version.js"></script>\n</body>|' www/index.html
-          fi
-          if ! grep -q 'report-fix.js' www/index.html; then
-            sed -i 's|</body>|<script src="report-fix.js"></script>\n</body>|' www/index.html
-          fi
+          printf "%s\n" "window.APP_VERSION='${APP_VERSION}';" "window.APP_VERSION_CODE=${APP_VERSION_CODE};" "(function(){function p(){try{var v=window.APP_VERSION||'?';document.querySelectorAll('.rule').forEach(function(el){if(el&&el.textContent.indexOf('v')<0){el.textContent=el.textContent+' • v'+v}});var h1=document.querySelector('.hero h1,.fun-hero h1');if(h1&&!document.getElementById('verBadge')){var b=document.createElement('span');b.id='verBadge';b.textContent='v'+v;b.style.cssText='margin-right:8px;font-size:11px;opacity:.9;background:rgba(255,255,255,.25);padding:2px 8px;border-radius:99px;font-weight:800';h1.appendChild(b);}}catch(e){}}setTimeout(p,500);setTimeout(p,1500);setInterval(p,4000);})();" > www/version.js
+          grep -q 'version.js' www/index.html || sed -i 's|</body>|<script src="version.js"></script>\n</body>|' www/index.html
+          grep -q 'report-fix.js' www/index.html || sed -i 's|</body>|<script src="report-fix.js"></script>\n</body>|' www/index.html
           ls -la www/
 
       - name: Install Capacitor
@@ -65,75 +59,57 @@ jobs:
       - name: Create Android project
         run: npx cap add android
 
-      - name: Fixed debug keystore + versionCode
+      - name: Configure version and signing
         env:
           APP_VERSION: ${{ steps.ver.outputs.name }}
           APP_VERSION_CODE: ${{ steps.ver.outputs.code }}
         run: |
           set -e
-          # Same keystore every build so Android accepts update without uninstall
           mkdir -p android/app
-          base64 -d debug.keystore.b64 > android/app/debug.keystore
-          ls -la android/app/debug.keystore
-
-          GRADLE=android/app/build.gradle
-          if [ -f "$GRADLE" ]; then
-            sed -i 's/applicationId .*/applicationId "com.daftar.roozane"/' "$GRADLE"
-
-            if grep -q versionCode "$GRADLE"; then
-              sed -i "s/versionCode .*/versionCode ${APP_VERSION_CODE}/" "$GRADLE"
-            else
-              sed -i "/applicationId/a\        versionCode ${APP_VERSION_CODE}" "$GRADLE"
-            fi
-
-            if grep -q versionName "$GRADLE"; then
-              sed -i "s/versionName .*/versionName \"${APP_VERSION}\"/" "$GRADLE"
-            else
-              sed -i "/versionCode/a\        versionName \"${APP_VERSION}\"" "$GRADLE"
-            fi
-
-            # Force signing with our fixed debug keystore
-            if ! grep -q 'storeFile file' "$GRADLE"; then
-              cat >> "$GRADLE" << 'GSE'
-
-android.signingConfigs {
-}
-GSE
-            fi
-
-            # Inject signingConfig into debug buildType via a small snippet file applied by gradle
-            cat > android/app/signing.gradle << EOF
-android {
-    signingConfigs {
-        fixedDebug {
-            storeFile file("debug.keystore")
-            storePassword "android"
-            keyAlias "androiddebugkey"
-            keyPassword "android"
-        }
-    }
-    buildTypes {
-        debug {
-            signingConfig signingConfigs.fixedDebug
-        }
-    }
-}
-EOF
-            if ! grep -q 'signing.gradle' "$GRADLE"; then
-              echo "apply from: 'signing.gradle'" >> "$GRADLE"
-            fi
-
-            echo "---- defaultConfig ----"
-            grep -A25 defaultConfig "$GRADLE" || true
+          if [ -f debug.keystore.b64 ]; then
+            base64 -d debug.keystore.b64 > android/app/debug.keystore
+            echo "keystore ready"
+          else
+            echo "WARNING: no fixed keystore"
           fi
+          GRADLE=android/app/build.gradle
+          test -f "$GRADLE"
+          sed -i 's/applicationId .*/applicationId "com.daftar.roozane"/' "$GRADLE"
+          if grep -q versionCode "$GRADLE"; then
+            sed -i "s/versionCode .*/versionCode ${APP_VERSION_CODE}/" "$GRADLE"
+          else
+            sed -i "/applicationId/a\        versionCode ${APP_VERSION_CODE}" "$GRADLE"
+          fi
+          if grep -q versionName "$GRADLE"; then
+            sed -i "s/versionName .*/versionName \"${APP_VERSION}\"/" "$GRADLE"
+          else
+            sed -i "/versionCode/a\        versionName \"${APP_VERSION}\"" "$GRADLE"
+          fi
+          printf '%s\n' \
+            'android {' \
+            '    signingConfigs {' \
+            '        fixedDebug {' \
+            '            storeFile file("debug.keystore")' \
+            '            storePassword "android"' \
+            '            keyAlias "androiddebugkey"' \
+            '            keyPassword "android"' \
+            '        }' \
+            '    }' \
+            '    buildTypes {' \
+            '        debug {' \
+            '            signingConfig signingConfigs.fixedDebug' \
+            '        }' \
+            '    }' \
+            '}' \
+            > android/app/signing.gradle
+          grep -q "signing.gradle" "$GRADLE" || echo "apply from: 'signing.gradle'" >> "$GRADLE"
+          grep -A20 defaultConfig "$GRADLE" || true
 
       - name: Add notification permissions
         run: |
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-          if [ -f "$MANIFEST" ]; then
-            if ! grep -q POST_NOTIFICATIONS "$MANIFEST"; then
-              sed -i 's|<application|    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <application|' "$MANIFEST"
-            fi
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          if [ -f "$MANIFEST" ] && ! grep -q POST_NOTIFICATIONS "$MANIFEST"; then
+            sed -i 's|<application|    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <application|' "$MANIFEST"
           fi
 
       - name: App icon
