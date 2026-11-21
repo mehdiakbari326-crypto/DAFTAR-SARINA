@@ -1,4 +1,4 @@
-/* Sync v4: kill old listeners, Firebase source of truth, never let empty wipe rich data */
+/* Sync v5: always apply Firebase on open; never ignore richer remote */
 (function(){
   var THEME_KEY='daftar-theme-local';
   var hydrated=false;
@@ -6,6 +6,7 @@
   var pushTimer=null;
   var lastSig='';
   var localUpdatedAt=0;
+  var lastPull=0;
 
   function loadLocalTheme(){
     try{return localStorage.getItem(THEME_KEY)||null}catch(e){return null}
@@ -19,32 +20,6 @@
       S.theme=t;
       if(typeof applyTheme==='function')applyTheme();
     }
-  }
-
-  function richness(x){
-    if(!x)return 0;
-    var n=0;
-    try{
-      n+=(x.tasks&&x.tasks.length)||0;
-      n+=((x.rewards&&x.rewards.length)||0)*2;
-      n+=((x.healthItems&&x.healthItems.length)||0)*2;
-      n+=((x.posBehaviors&&x.posBehaviors.length)||0);
-      n+=((x.negBehaviors&&x.negBehaviors.length)||0);
-      n+=((x.claims&&x.claims.length)||0);
-      n+=((x.pendingChanges&&x.pendingChanges.length)||0);
-      if(x.days){
-        var keys=Object.keys(x.days);
-        n+=keys.length*3;
-        keys.forEach(function(k){
-          var d=x.days[k]||{};
-          if(d.tasks) n+=Object.keys(d.tasks).length;
-          if(d.notes) n+=(d.notes.length||0);
-          if(d.weight) n+=1;
-        });
-      }
-      if(x.streak) n+=x.streak;
-    }catch(e){}
-    return n;
   }
 
   function sharedFrom(Sref){
@@ -107,6 +82,41 @@
     }catch(e){}
   }
 
+  function pullRemote(showMsg){
+    if(typeof db==='undefined'||!db){
+      setOnline(false);
+      if(showMsg&&typeof showToast==='function')showToast('اتصال ابر برقرار نیست');
+      return Promise.resolve(false);
+    }
+    return db.ref(FAMILY_PATH).once('value').then(function(snap){
+      var r=snap.val();
+      setOnline(true);
+      lastPull=Date.now();
+      if(!r){
+        if(showMsg&&typeof showToast==='function')showToast('ابری خالی است');
+        return false;
+      }
+      var s=sigOf(r);
+      var changed=(s!==lastSig);
+      lastSig=s;
+      applyRemote(r);
+      hydrated=true;
+      window.__sarinaHydrated=true;
+      if(changed){
+        try{if(typeof render==='function')render()}catch(e){}
+      }
+      if(showMsg&&typeof showToast==='function'){
+        showToast(changed?'همگام شد ✓':'قبلاً همگام بود');
+      }
+      return changed;
+    }).catch(function(err){
+      console.log('pull error',err);
+      setOnline(false);
+      if(showMsg&&typeof showToast==='function')showToast('خطا در دریافت از ابر');
+      return false;
+    });
+  }
+
   function pushNow(force){
     if(!hydrated&&!force){
       console.log('sync: skip push until hydrated');
@@ -118,32 +128,18 @@
       return;
     }
     var payload=sharedFrom(S);
-    db.ref(FAMILY_PATH).once('value').then(function(snap){
-      var remote=snap.val();
-      if(remote&&!force){
-        var rr=richness(remote), lr=richness(payload);
-        var remoteAt=remote._updatedAt||0;
-        if(rr>lr+3 && remoteAt>=localUpdatedAt){
-          console.log('sync: abort push, remote richer',rr,lr);
-          applyRemote(remote);
-          lastSig=sigOf(remote);
-          try{if(typeof render==='function')render()}catch(e){}
-          return;
-        }
-      }
-      writing=true;
-      if(typeof ignoreRemote!=='undefined') ignoreRemote=true;
-      localUpdatedAt=payload._updatedAt;
-      return db.ref(FAMILY_PATH).update(payload).then(function(){
-        writing=false;
-        lastSig=sigOf(payload);
-        setTimeout(function(){
-          if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
-        },800);
-        setOnline(true);
-        try{if(typeof lsSave==='function')lsSave()}catch(e){}
-        console.log('sync: pushed rich',richness(payload));
-      });
+    writing=true;
+    if(typeof ignoreRemote!=='undefined') ignoreRemote=true;
+    localUpdatedAt=payload._updatedAt;
+    db.ref(FAMILY_PATH).update(payload).then(function(){
+      writing=false;
+      lastSig=sigOf(payload);
+      setTimeout(function(){
+        if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
+      },1000);
+      setOnline(true);
+      try{if(typeof lsSave==='function')lsSave()}catch(e){}
+      console.log('sync: pushed',payload._updatedAt);
     }).catch(function(err){
       writing=false;
       if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
@@ -157,53 +153,30 @@
     if(S&&S.theme) saveLocalTheme(S.theme);
     localUpdatedAt=Date.now();
     if(pushTimer) clearTimeout(pushTimer);
-    pushTimer=setTimeout(function(){pushNow(false)},500);
+    pushTimer=setTimeout(function(){pushNow(false)},600);
   }
 
+  // Override save — always update(), never set()
   saveProfile=function(){ schedulePush(); };
   startFirebaseSync=function(){ setOnline(!!(typeof db!=='undefined'&&db)); };
 
   function attach(){
     if(typeof db==='undefined'||!db)return false;
-    if(db._syncV4)return true;
-    db._syncV4=true;
+    if(db._syncV5)return true;
+    db._syncV5=true;
 
     try{ db.ref(FAMILY_PATH).off(); }catch(e){}
 
-    db.ref(FAMILY_PATH).once('value').then(function(snap){
-      var r=snap.val();
-      var localR=richness(S);
-      if(r){
-        var remoteR=richness(r);
-        console.log('sync hydrate local',localR,'remote',remoteR);
-        if(remoteR>=localR){
-          applyRemote(r);
-          lastSig=sigOf(r);
-        }else{
-          lastSig=sigOf(r);
-          hydrated=true;
-          window.__sarinaHydrated=true;
-          pushNow(true);
-          setOnline(true);
-          try{if(typeof render==='function')render()}catch(e){}
-          return;
-        }
-      }else if(localR>0){
-        writing=true;
-        db.ref(FAMILY_PATH).update(sharedFrom(S)).then(function(){
-          writing=false;
-          lastSig=sigOf(sharedFrom(S));
-        }).catch(function(){writing=false});
+    // ALWAYS take server data first
+    pullRemote(false).then(function(changed){
+      hydrated=true;
+      window.__sarinaHydrated=true;
+      // If cloud empty and local has data, seed once
+      if(!lastSig){
+        var hasLocal=(S.tasks&&S.tasks.length)||(S.healthItems&&S.healthItems.length)||(S.days&&Object.keys(S.days).length);
+        if(hasLocal) pushNow(true);
       }
-      hydrated=true;
-      window.__sarinaHydrated=true;
-      setOnline(true);
       try{if(typeof render==='function')render()}catch(e){}
-    }).catch(function(err){
-      console.log('sync hydrate error',err);
-      hydrated=true;
-      window.__sarinaHydrated=true;
-      setOnline(false);
     });
 
     db.ref(FAMILY_PATH).on('value',function(snap){
@@ -213,19 +186,13 @@
       if(!r)return;
       var s=sigOf(r);
       if(s===lastSig)return;
-      var remoteR=richness(r);
-      var localR=richness(S);
-      var remoteAt=r._updatedAt||0;
-      if(remoteR+2<localR && remoteAt<localUpdatedAt){
-        console.log('sync: ignore poorer older remote');
-        return;
-      }
       lastSig=s;
       applyRemote(r);
       hydrated=true;
       window.__sarinaHydrated=true;
       setOnline(true);
       try{if(typeof render==='function')render()}catch(e){}
+      console.log('sync: live update applied');
     },function(err){
       console.log('sync listen error',err);
       setOnline(false);
@@ -246,32 +213,34 @@
     if(a==='force-sync'){
       e.preventDefault();
       e.stopPropagation();
-      if(typeof db==='undefined'||!db){
-        if(typeof showToast==='function')showToast('اتصال برقرار نیست');
-        return;
-      }
-      db.ref(FAMILY_PATH).once('value').then(function(snap){
-        var r=snap.val();
-        if(r){
-          applyRemote(r);
-          lastSig=sigOf(r);
-          if(typeof showToast==='function')showToast('همگام شد ✓');
-          if(typeof render==='function')render();
-        }else{
-          pushNow(true);
-          if(typeof showToast==='function')showToast('داده محلی ارسال شد');
-        }
-      }).catch(function(){
-        if(typeof showToast==='function')showToast('خطا در همگام‌سازی');
-      });
+      pullRemote(true);
     }
   },true);
+
+  // Show sync button on home for parents
+  var _todayView=typeof todayView==='function'?todayView:null;
+  if(_todayView){
+    todayView=function(){
+      var html=_todayView();
+      try{
+        if(typeof deviceRole!=='undefined'&&deviceRole==='child')return html;
+        if(typeof isParent!=='undefined'&&!isParent)return html;
+      }catch(e){}
+      if(html.indexOf('force-sync')>=0)return html;
+      var bar='<div style="display:flex;gap:8px;justify-content:center;margin:4px 0 8px">';
+      bar+='<button type="button" class="ghost" data-act="force-sync" style="font-weight:800">☁️ همگام‌سازی با ابر</button>';
+      bar+='</div>';
+      // inject after hero / before first card
+      html=html.replace(/(<section class="card")/, bar+'$1');
+      return html;
+    };
+  }
 
   var _settingsView=typeof settingsView==='function'?settingsView:null;
   if(_settingsView){
     settingsView=function(){
       var html=_settingsView();
-      if(html.indexOf('force-sync')>=0)return html;
+      if(html.indexOf('data-act="force-sync"')>=0)return html;
       var btn='<section class="card"><div class="card-h"><h2>☁️ همگام‌سازی</h2></div>';
       btn+='<p class="muted">اگر دو گوشی یکی نیستند این دکمه را بزنید</p>';
       btn+='<button type="button" class="btn" data-act="force-sync" style="width:100%">دریافت آخرین داده از ابر</button></section>';
@@ -285,34 +254,31 @@
     (function waitDb(){
       tries++;
       if(attach())return;
-      if(tries<60) setTimeout(waitDb,200);
+      if(tries<80) setTimeout(waitDb,200);
       else{hydrated=true;window.__sarinaHydrated=true;setOnline(false);}
     })();
 
+    // Pull every 3s
     setInterval(function(){
-      if(typeof db==='undefined'||!db||writing)return;
-      db.ref(FAMILY_PATH).once('value').then(function(snap){
-        var r=snap.val();
-        if(!r)return;
-        var s=sigOf(r);
-        if(s===lastSig)return;
-        var remoteR=richness(r), localR=richness(S);
-        if(remoteR+2<localR && (r._updatedAt||0)<localUpdatedAt)return;
-        lastSig=s;
-        applyRemote(r);
-        hydrated=true;
-        setOnline(true);
-        try{if(typeof render==='function')render()}catch(e){}
-      }).catch(function(){});
-    },4000);
+      if(writing)return;
+      if(Date.now()-lastPull<2500)return;
+      pullRemote(false);
+    },3000);
+
+    // When app comes to foreground
+    document.addEventListener('visibilitychange',function(){
+      if(document.visibilityState==='visible'){
+        setTimeout(function(){pullRemote(false)},300);
+      }
+    });
   }
 
   if(document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded',function(){setTimeout(boot,200)});
+    document.addEventListener('DOMContentLoaded',function(){setTimeout(boot,150)});
   }else{
-    setTimeout(boot,200);
+    setTimeout(boot,150);
   }
 
-  window.__sarinaSync={forcePush:function(){pushNow(true)},hydrated:function(){return hydrated}};
-  console.log('sync-fix v4 loaded');
+  window.__sarinaSync={forcePush:function(){pushNow(true)},pull:function(){return pullRemote(true)},hydrated:function(){return hydrated}};
+  console.log('sync-fix v5 loaded');
 })();
