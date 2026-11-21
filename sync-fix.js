@@ -1,13 +1,15 @@
-/* Sync v8: auto hard-reset when local is empty-looking but cloud has real data */
+/* Sync v9: Firebase RTDB + REST HTTPS fallback (for blocked WebSocket networks) */
 (function(){
   var THEME_KEY='daftar-theme-local';
   var PATH='family/sarina';
+  var REST_BASE='https://sarina-daftar-default-rtdb.firebaseio.com/family/sarina.json';
   var hydrated=false;
   var pulledOnce=false;
   var writing=false;
   var pushTimer=null;
   var lastSig='';
   var reallyOnline=false;
+  var usingRest=false;
 
   function getDb(){
     try{
@@ -42,7 +44,7 @@
       el.className='toast';
       el.textContent=msg;
       document.body.appendChild(el);
-      setTimeout(function(){try{el.remove()}catch(e){}},3000);
+      setTimeout(function(){try{el.remove()}catch(e){}},3200);
     }catch(e){ try{alert(msg)}catch(x){} }
   }
 
@@ -93,13 +95,11 @@
     (items||[]).forEach(function(x){ if(x&&x.lastDate) n++; });
     return n;
   }
-
   function localLooksEmpty(){
     try{
       var days=S.days?Object.keys(S.days).length:0;
       var dated=countHealthDates(S.healthItems);
       var streak=S.streak||0;
-      // empty if almost no day history and no health dates and zero streak
       return days===0 && dated===0 && streak===0;
     }catch(e){ return true; }
   }
@@ -137,48 +137,71 @@
     return 'تسک '+t+' | سلامتی '+h+' ('+withDate+' تاریخ) | روز '+d+' | پاداش '+rw;
   }
 
-  function pullRemote(showMsg){
-    var database=getDb();
-    if(!database){
-      setDot(false);
-      if(showMsg) toast('Firebase وصل نیست');
-      return Promise.resolve(false);
-    }
-    return database.ref(getPath()).once('value').then(function(snap){
-      var r=snap.val();
+  // ---- REST fallback (works when WebSocket is blocked) ----
+  function restPull(){
+    return fetch(REST_BASE+'?cacheBust='+Date.now(), {
+      method:'GET',
+      headers:{'Accept':'application/json'},
+      cache:'no-store'
+    }).then(function(res){
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      return res.json();
+    }).then(function(r){
+      usingRest=true;
       setDot(true);
+      return r;
+    });
+  }
+
+  function restPush(payload){
+    return fetch(REST_BASE, {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    }).then(function(res){
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      usingRest=true;
+      setDot(true);
+      return res.json();
+    });
+  }
+
+  function sdkPull(){
+    var database=getDb();
+    if(!database) return Promise.reject(new Error('no-db'));
+    return database.ref(getPath()).once('value').then(function(snap){
+      setDot(true);
+      return snap.val();
+    });
+  }
+
+  function pullRemote(showMsg){
+    // Try SDK first, then REST
+    var trySdk=sdkPull().catch(function(){ return null; });
+    return trySdk.then(function(r){
+      if(r) return r;
+      return restPull();
+    }).then(function(r){
       if(!r){
-        if(showMsg) toast('ابر خالی است');
+        if(showMsg) toast('ابر خالی است یا در دسترس نیست');
         hydrated=true;
         window.__sarinaHydrated=true;
         return false;
       }
-
-      var remoteDated=countHealthDates(r.healthItems);
-      var remoteDays=r.days?Object.keys(r.days).length:0;
-      var remoteHasData=remoteDated>0||remoteDays>0||(r.streak||0)>0;
-
       applyRemote(r);
       lastSig=sigOf(r);
       hydrated=true;
       pulledOnce=true;
       window.__sarinaHydrated=true;
-
-      try{ if(typeof render==='function') render(); }catch(e){ console.log(e); }
-
-      if(showMsg) toast('از ابر: '+summarize(r)+' ✓');
-
-      // If this device looked empty and cloud has real data, reload UI shell once
-      if(remoteHasData && showMsg){
-        setTimeout(function(){
-          try{ if(typeof render==='function') render(); }catch(e){}
-        }, 100);
+      try{ if(typeof render==='function') render(); }catch(e){}
+      if(showMsg){
+        toast('از ابر'+(usingRest?' (REST)':'')+': '+summarize(r)+' ✓');
       }
       return true;
     }).catch(function(err){
       console.log('pull error',err);
       setDot(false);
-      if(showMsg) toast('خطای ابر: '+(err&&err.message?err.message:'نامشخص'));
+      if(showMsg) toast('عدم اتصال به ابر — VPN یا اینترنت دیگر را امتحان کنید');
       return false;
     });
   }
@@ -209,33 +232,30 @@
           try{ location.reload(); }catch(e){}
         }, 500);
       }else{
-        toast('بازنشانی ناموفق — اینترنت را چک کنید');
+        toast('وصل نشد. VPN روشن کنید و دوباره بزنید');
       }
       return ok;
     });
   }
 
   function pushNow(force){
-    if(!pulledOnce && !force){
-      console.log('sync: block push until first pull');
-      return;
-    }
-    // Never push empty-looking local over cloud
-    if(localLooksEmpty() && !force){
-      console.log('sync: block push of empty local');
-      return;
-    }
+    if(!pulledOnce && !force) return;
+    if(localLooksEmpty() && !force) return;
     if(!hydrated&&!force)return;
-    var database=getDb();
-    if(!database){
-      setDot(false);
-      try{ if(typeof lsSave==='function') lsSave(); }catch(e){}
-      return;
-    }
+
     var payload=sharedFrom(S);
     writing=true;
     if(typeof ignoreRemote!=='undefined') ignoreRemote=true;
-    database.ref(getPath()).update(payload).then(function(){
+
+    var database=getDb();
+    var p;
+    if(database && !usingRest){
+      p=database.ref(getPath()).update(payload);
+    }else{
+      p=restPush(payload);
+    }
+
+    Promise.resolve(p).then(function(){
       writing=false;
       lastSig=sigOf(payload);
       setTimeout(function(){
@@ -244,10 +264,18 @@
       setDot(true);
       try{ if(typeof lsSave==='function') lsSave(); }catch(e){}
     }).catch(function(err){
-      writing=false;
-      if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
-      setDot(false);
-      console.log('push error',err);
+      // fallback to REST if SDK push failed
+      restPush(payload).then(function(){
+        writing=false;
+        lastSig=sigOf(payload);
+        if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
+        setDot(true);
+      }).catch(function(e2){
+        writing=false;
+        if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
+        setDot(false);
+        console.log('push error',err,e2);
+      });
     });
   }
 
@@ -268,21 +296,44 @@
     if(!database)return;
     try{
       database.ref('.info/connected').on('value',function(snap){
-        setDot(!!snap.val());
+        var on=!!snap.val();
+        if(on){ usingRest=false; setDot(true); }
+        else if(!usingRest) setDot(false);
       });
     }catch(e){}
   }
 
   function attach(){
     var database=getDb();
-    if(!database)return false;
-    if(database._syncV8)return true;
-    database._syncV8=true;
+    // Even without SDK, REST can work
+    if(database){
+      if(database._syncV9)return true;
+      database._syncV9=true;
+      try{ database.ref(getPath()).off(); }catch(e){}
+      watchConnection();
 
-    try{ database.ref(getPath()).off(); }catch(e){}
-    watchConnection();
+      database.ref(getPath()).on('value',function(snap){
+        if(writing)return;
+        if(typeof ignoreRemote!=='undefined'&&ignoreRemote)return;
+        var r=snap.val();
+        if(!r)return;
+        var s=sigOf(r);
+        if(s===lastSig)return;
+        lastSig=s;
+        applyRemote(r);
+        hydrated=true;
+        pulledOnce=true;
+        window.__sarinaHydrated=true;
+        try{ if(typeof render==='function') render(); }catch(e){}
+      },function(err){
+        console.log('listen error',err);
+      });
+    }else if(window._syncV9Rest){
+      return true;
+    }else{
+      window._syncV9Rest=true;
+    }
 
-    // First pull: if local empty and cloud full, hard-apply + reload once
     var wasEmpty=localLooksEmpty();
     pullRemote(false).then(function(ok){
       if(ok && wasEmpty && !localLooksEmpty()){
@@ -295,24 +346,6 @@
         if(hasLocal){ pulledOnce=true; pushNow(true); }
       }
       try{ if(typeof render==='function') render(); }catch(e){}
-    });
-
-    database.ref(getPath()).on('value',function(snap){
-      if(writing)return;
-      if(typeof ignoreRemote!=='undefined'&&ignoreRemote)return;
-      var r=snap.val();
-      if(!r)return;
-      var s=sigOf(r);
-      if(s===lastSig)return;
-      lastSig=s;
-      applyRemote(r);
-      hydrated=true;
-      pulledOnce=true;
-      window.__sarinaHydrated=true;
-      try{ if(typeof render==='function') render(); }catch(e){}
-    },function(err){
-      console.log('listen error',err);
-      setDot(false);
     });
 
     return true;
@@ -343,9 +376,8 @@
     if(html.indexOf('data-act="hard-sync"')>=0) return html;
     var bar='<div style="display:flex;flex-direction:column;gap:8px;align-items:center;margin:6px 0 12px">';
     bar+='<button type="button" class="btn" data-act="force-sync" style="width:80%;background:linear-gradient(90deg,#6B3FBF,#9B6DFF)">☁️ همگام‌سازی با ابر</button>';
-    bar+='<button type="button" class="ghost" data-act="hard-sync" style="font-size:12px;font-weight:700">🔄 بازنشانی کامل از ابر (برای گوشی دیگر)</button>';
+    bar+='<button type="button" class="ghost" data-act="hard-sync" style="font-size:12px;font-weight:700">🔄 بازنشانی کامل از ابر</button>';
     bar+='</div>';
-    // remove older single button wrappers if present
     html=html.replace(/<div[^>]*>\s*<button[^>]*data-act="force-sync"[\s\S]*?<\/div>/,'');
     return html.replace(/(<section class="card")/, bar+'$1');
   }
@@ -365,7 +397,7 @@
       var html=_settingsView();
       if(html.indexOf('data-act="hard-sync"')>=0) return html;
       var btn='<section class="card"><div class="card-h"><h2>☁️ همگام‌سازی</h2></div>';
-      btn+='<p class="muted">روی گوشی که داده ناقص دارد «بازنشانی کامل» را بزنید</p>';
+      btn+='<p class="muted">اگر نقطه قرمز است، VPN را روشن کنید یا بازنشانی را بزنید</p>';
       btn+='<button type="button" class="btn" data-act="force-sync" style="width:100%;margin-bottom:8px">دریافت از ابر</button>';
       btn+='<button type="button" class="ghost" data-act="hard-sync" style="width:100%">🔄 بازنشانی کامل از ابر</button></section>';
       return html+btn;
@@ -378,10 +410,10 @@
     (function waitDb(){
       tries++;
       if(attach()) return;
-      if(tries<100) setTimeout(waitDb,200);
-      else setDot(false);
+      if(tries<30) setTimeout(waitDb,200);
+      else attach(); // REST-only mode
     })();
-    setInterval(function(){ if(!writing) pullRemote(false); }, 5000);
+    setInterval(function(){ if(!writing) pullRemote(false); }, 6000);
     document.addEventListener('visibilitychange',function(){
       if(document.visibilityState==='visible') setTimeout(function(){ pullRemote(false); }, 200);
     });
@@ -399,5 +431,5 @@
     push:function(){pushNow(true)},
     online:function(){return reallyOnline}
   };
-  console.log('sync-fix v8 loaded');
+  console.log('sync-fix v9 loaded');
 })();
