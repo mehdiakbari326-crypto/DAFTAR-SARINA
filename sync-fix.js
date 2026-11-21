@@ -1,8 +1,9 @@
-/* Sync v6: real connection status, hard pull from Firebase, diagnostics */
+/* Sync v7: hard reset from cloud, no push before pull, keep role/theme */
 (function(){
   var THEME_KEY='daftar-theme-local';
   var PATH='family/sarina';
   var hydrated=false;
+  var pulledOnce=false;
   var writing=false;
   var pushTimer=null;
   var lastSig='';
@@ -11,16 +12,12 @@
   function getDb(){
     try{
       if(typeof db!=='undefined'&&db) return db;
-      if(typeof firebase!=='undefined'&&firebase.database){
-        return firebase.database();
-      }
+      if(typeof firebase!=='undefined'&&firebase.database) return firebase.database();
     }catch(e){}
     return null;
   }
   function getPath(){
-    try{
-      if(typeof FAMILY_PATH==='string'&&FAMILY_PATH) return FAMILY_PATH;
-    }catch(e){}
+    try{ if(typeof FAMILY_PATH==='string'&&FAMILY_PATH) return FAMILY_PATH; }catch(e){}
     return PATH;
   }
 
@@ -39,26 +36,21 @@
   }
 
   function toast(msg){
-    try{
-      if(typeof showToast==='function'){showToast(msg);return;}
-    }catch(e){}
+    try{ if(typeof showToast==='function'){ showToast(msg); return; } }catch(e){}
     try{
       var el=document.createElement('div');
       el.className='toast';
       el.textContent=msg;
       document.body.appendChild(el);
-      setTimeout(function(){try{el.remove()}catch(e){}},2500);
-    }catch(e){try{alert(msg)}catch(x){}}
+      setTimeout(function(){try{el.remove()}catch(e){}},2800);
+    }catch(e){ try{alert(msg)}catch(x){} }
   }
 
   function setDot(online){
     reallyOnline=!!online;
     try{
-      if(typeof syncStatus!=='undefined'){
-        syncStatus=online?'online':'offline';
-      }
+      if(typeof syncStatus!=='undefined') syncStatus=online?'online':'offline';
       if(typeof updateSyncDot==='function') updateSyncDot();
-      // also force-paint dots in case updateSyncDot is stale
       document.querySelectorAll('.sync-dot').forEach(function(d){
         d.classList.toggle('on', !!online);
         d.classList.toggle('off', !online);
@@ -98,37 +90,36 @@
 
   function applyRemote(r){
     if(!r||typeof r!=='object')return false;
-    // HARD replace shared fields from server
-    S.name = r.name!=null ? r.name : S.name;
-    S.tasks = Array.isArray(r.tasks) ? r.tasks : [];
-    S.days = (r.days && typeof r.days==='object') ? r.days : {};
-    S.rewards = Array.isArray(r.rewards) ? r.rewards : [];
-    S.claims = Array.isArray(r.claims) ? r.claims : [];
+    S.name = r.name!=null ? r.name : (S.name||'سارینا');
+    S.tasks = Array.isArray(r.tasks) ? r.tasks.slice() : [];
+    S.days = (r.days && typeof r.days==='object') ? JSON.parse(JSON.stringify(r.days)) : {};
+    S.rewards = Array.isArray(r.rewards) ? r.rewards.slice() : [];
+    S.claims = Array.isArray(r.claims) ? r.claims.slice() : [];
     S.goal = (r.goal!=null) ? r.goal : 15;
-    S.parentTasks = Array.isArray(r.parentTasks) ? r.parentTasks : [];
+    S.parentTasks = Array.isArray(r.parentTasks) ? r.parentTasks.slice() : [];
     S.parentPin = r.parentPin || '1234';
-    S.posBehaviors = Array.isArray(r.posBehaviors) ? r.posBehaviors : [];
-    S.negBehaviors = Array.isArray(r.negBehaviors) ? r.negBehaviors : [];
+    S.posBehaviors = Array.isArray(r.posBehaviors) ? r.posBehaviors.slice() : [];
+    S.negBehaviors = Array.isArray(r.negBehaviors) ? r.negBehaviors.slice() : [];
     S.streak = r.streak || 0;
     S.lastActive = r.lastActive || '';
-    S.pendingChanges = Array.isArray(r.pendingChanges) ? r.pendingChanges : [];
-    S.healthItems = Array.isArray(r.healthItems) ? r.healthItems : [];
+    S.pendingChanges = Array.isArray(r.pendingChanges) ? r.pendingChanges.slice() : [];
+    S.healthItems = Array.isArray(r.healthItems) ? JSON.parse(JSON.stringify(r.healthItems)) : [];
     applyLocalTheme();
-    try{
-      // write local cache AFTER server apply
-      localStorage.setItem('daftar-sarina-v9', JSON.stringify(S));
-    }catch(e){}
-    try{if(typeof lsSave==='function')lsSave()}catch(e){}
+    try{ localStorage.setItem('daftar-sarina-v9', JSON.stringify(S)); }catch(e){}
+    try{ localStorage.setItem('daftar-sarina-backup-v9', JSON.stringify(S)); }catch(e){}
+    try{ if(typeof lsSave==='function') lsSave(); }catch(e){}
     return true;
   }
 
   function summarize(r){
-    if(!r)return 'خالی';
+    if(!r) return 'خالی';
     var h=(r.healthItems&&r.healthItems.length)||0;
     var t=(r.tasks&&r.tasks.length)||0;
     var d=r.days?Object.keys(r.days).length:0;
     var rw=(r.rewards&&r.rewards.length)||0;
-    return 'تسک '+t+' | سلامتی '+h+' | روز '+d+' | پاداش '+rw;
+    var withDate=0;
+    if(r.healthItems){ r.healthItems.forEach(function(x){ if(x&&x.lastDate) withDate++; }); }
+    return 'تسک '+t+' | سلامتی '+h+' ('+withDate+' تاریخ‌دار) | روز '+d+' | پاداش '+rw;
   }
 
   function pullRemote(showMsg){
@@ -138,8 +129,7 @@
       if(showMsg) toast('Firebase وصل نیست');
       return Promise.resolve(false);
     }
-    var path=getPath();
-    return database.ref(path).once('value').then(function(snap){
+    return database.ref(getPath()).once('value').then(function(snap){
       var r=snap.val();
       setDot(true);
       if(!r){
@@ -148,16 +138,13 @@
         window.__sarinaHydrated=true;
         return false;
       }
-      var before=sigOf({healthItems:S.healthItems,days:S.days,tasks:S.tasks,rewards:S.rewards,goal:S.goal});
       applyRemote(r);
       lastSig=sigOf(r);
       hydrated=true;
+      pulledOnce=true;
       window.__sarinaHydrated=true;
-      try{if(typeof render==='function')render()}catch(e){console.log('render after pull',e)}
-      var after=sigOf({healthItems:S.healthItems,days:S.days,tasks:S.tasks,rewards:S.rewards,goal:S.goal});
-      if(showMsg){
-        toast('از ابر: '+summarize(r)+(before!==after?' ✓':' (بدون تغییر)'));
-      }
+      try{ if(typeof render==='function') render(); }catch(e){ console.log(e); }
+      if(showMsg) toast('از ابر: '+summarize(r)+' ✓');
       return true;
     }).catch(function(err){
       console.log('pull error',err);
@@ -167,12 +154,48 @@
     });
   }
 
+  function hardResetFromCloud(){
+    toast('بازنشانی از ابر...');
+    // Keep role + theme only
+    var role='', theme=loadLocalTheme();
+    try{ role=localStorage.getItem('daftar-device-role-v2')||localStorage.getItem('daftar-device-role-backup')||''; }catch(e){}
+    try{
+      localStorage.removeItem('daftar-sarina-v9');
+      localStorage.removeItem('daftar-sarina-backup-v9');
+    }catch(e){}
+    // Clear in-memory shared state before pull
+    try{
+      S.tasks=[]; S.days={}; S.rewards=[]; S.claims=[];
+      S.posBehaviors=[]; S.negBehaviors=[]; S.healthItems=[];
+      S.pendingChanges=[]; S.streak=0;
+    }catch(e){}
+    return pullRemote(true).then(function(ok){
+      try{
+        if(role){
+          localStorage.setItem('daftar-device-role-v2', role);
+          localStorage.setItem('daftar-device-role-backup', role);
+        }
+        if(theme) saveLocalTheme(theme);
+      }catch(e){}
+      if(ok){
+        setTimeout(function(){
+          try{ location.reload(); }catch(e){}
+        }, 600);
+      }
+      return ok;
+    });
+  }
+
   function pushNow(force){
+    if(!pulledOnce && !force){
+      console.log('sync: block push until first pull');
+      return;
+    }
     if(!hydrated&&!force)return;
     var database=getDb();
     if(!database){
       setDot(false);
-      try{if(typeof lsSave==='function')lsSave()}catch(e){}
+      try{ if(typeof lsSave==='function') lsSave(); }catch(e){}
       return;
     }
     var payload=sharedFrom(S);
@@ -185,7 +208,7 @@
         if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
       },1200);
       setDot(true);
-      try{if(typeof lsSave==='function')lsSave()}catch(e){}
+      try{ if(typeof lsSave==='function') lsSave(); }catch(e){}
     }).catch(function(err){
       writing=false;
       if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
@@ -195,15 +218,15 @@
   }
 
   function schedulePush(){
-    try{if(typeof lsSave==='function')lsSave()}catch(e){}
+    try{ if(typeof lsSave==='function') lsSave(); }catch(e){}
     if(S&&S.theme) saveLocalTheme(S.theme);
+    if(!pulledOnce)return; // never upload before download
     if(pushTimer) clearTimeout(pushTimer);
-    pushTimer=setTimeout(function(){pushNow(false)},700);
+    pushTimer=setTimeout(function(){ pushNow(false); }, 800);
   }
 
-  // Override globals
   saveProfile=function(){ schedulePush(); };
-  startFirebaseSync=function(){ /* disabled: v6 owns sync */ };
+  startFirebaseSync=function(){};
 
   function watchConnection(){
     var database=getDb();
@@ -218,20 +241,18 @@
   function attach(){
     var database=getDb();
     if(!database)return false;
-    if(database._syncV6)return true;
-    database._syncV6=true;
+    if(database._syncV7)return true;
+    database._syncV7=true;
 
     try{ database.ref(getPath()).off(); }catch(e){}
     watchConnection();
 
-    // Hard pull on start
     pullRemote(false).then(function(ok){
       if(!ok){
-        // seed only if cloud empty and local has data
-        var hasLocal=(S.tasks&&S.tasks.length)||(S.healthItems&&S.healthItems.some(function(x){return x.lastDate;}));
-        if(hasLocal) pushNow(true);
+        var hasLocal=(S.tasks&&S.tasks.length)||(S.healthItems&&S.healthItems.some(function(x){return x&&x.lastDate;}));
+        if(hasLocal){ pulledOnce=true; pushNow(true); }
       }
-      try{if(typeof render==='function')render()}catch(e){}
+      try{ if(typeof render==='function') render(); }catch(e){}
     });
 
     database.ref(getPath()).on('value',function(snap){
@@ -244,8 +265,9 @@
       lastSig=s;
       applyRemote(r);
       hydrated=true;
+      pulledOnce=true;
       window.__sarinaHydrated=true;
-      try{if(typeof render==='function')render()}catch(e){}
+      try{ if(typeof render==='function') render(); }catch(e){}
     },function(err){
       console.log('listen error',err);
       setDot(false);
@@ -260,23 +282,29 @@
     var a=t.getAttribute('data-act');
     if(a==='theme'){
       setTimeout(function(){
-        if(S&&S.theme){saveLocalTheme(S.theme);applyLocalTheme();}
+        if(S&&S.theme){ saveLocalTheme(S.theme); applyLocalTheme(); }
       },30);
     }
     if(a==='force-sync'){
-      e.preventDefault();
-      e.stopPropagation();
+      e.preventDefault(); e.stopPropagation();
       toast('در حال دریافت...');
       pullRemote(true);
     }
+    if(a==='hard-sync'){
+      e.preventDefault(); e.stopPropagation();
+      hardResetFromCloud();
+    }
   },true);
 
-  // Inject visible sync button
   function injectSyncBtn(html){
-    if(!html||html.indexOf('data-act="force-sync"')>=0)return html;
-    var bar='<div style="display:flex;gap:8px;justify-content:center;margin:6px 0 10px">';
-    bar+='<button type="button" class="btn" data-act="force-sync" style="width:auto;min-width:60%;background:linear-gradient(90deg,#6B3FBF,#9B6DFF)">☁️ همگام‌سازی با ابر</button>';
+    if(!html) return html;
+    if(html.indexOf('data-act="hard-sync"')>=0) return html;
+    var bar='<div style="display:flex;flex-direction:column;gap:8px;align-items:center;margin:6px 0 12px">';
+    bar+='<button type="button" class="btn" data-act="force-sync" style="width:80%;background:linear-gradient(90deg,#6B3FBF,#9B6DFF)">☁️ همگام‌سازی با ابر</button>';
+    bar+='<button type="button" class="ghost" data-act="hard-sync" style="font-size:12px;font-weight:700">🔄 بازنشانی کامل از ابر</button>';
     bar+='</div>';
+    // remove older single button if present
+    html=html.replace(/<div[^>]*>\s*<button[^>]*data-act="force-sync"[\s\S]*?<\/div>/,'');
     return html.replace(/(<section class="card")/, bar+'$1');
   }
 
@@ -284,9 +312,7 @@
   if(_todayView){
     todayView=function(){
       var html=_todayView();
-      try{
-        if(typeof deviceRole!=='undefined'&&deviceRole==='child')return html;
-      }catch(e){}
+      try{ if(typeof deviceRole!=='undefined'&&deviceRole==='child') return html; }catch(e){}
       return injectSyncBtn(html);
     };
   }
@@ -295,10 +321,11 @@
   if(_settingsView){
     settingsView=function(){
       var html=_settingsView();
-      if(html.indexOf('data-act="force-sync"')>=0)return html;
-      var btn='<section class="card"><div class="card-h"><h2>☁️ همگام‌سازی</h2></div>';
-      btn+='<p class="muted">اگر دو گوشی یکی نیستند این دکمه را بزنید</p>';
-      btn+='<button type="button" class="btn" data-act="force-sync" style="width:100%">دریافت آخرین داده از ابر</button></section>';
+      if(html.indexOf('data-act="hard-sync"')>=0) return html;
+      var btn='<section class="card"><div class="h2">☁️ همگام‌سازی</h2></div>';
+      btn+='<p class="muted">اگر گوشی دیگر داده دارد و این گوشی نه، بازنشانی کامل را بزنید</p>';
+      btn+='<button type="button" class="btn" data-act="force-sync" style="width:100%;margin-bottom:8px">دریافت از ابر</button>';
+      btn+='<button type="button" class="ghost" data-act="hard-sync" style="width:100%">🔄 بازنشانی کامل از ابر</button></section>';
       return html+btn;
     };
   }
@@ -308,33 +335,27 @@
     var tries=0;
     (function waitDb(){
       tries++;
-      if(attach())return;
+      if(attach()) return;
       if(tries<100) setTimeout(waitDb,200);
       else setDot(false);
     })();
-
-    setInterval(function(){
-      if(writing)return;
-      pullRemote(false);
-    },4000);
-
+    setInterval(function(){ if(!writing) pullRemote(false); }, 5000);
     document.addEventListener('visibilitychange',function(){
-      if(document.visibilityState==='visible'){
-        setTimeout(function(){pullRemote(false)},200);
-      }
+      if(document.visibilityState==='visible') setTimeout(function(){ pullRemote(false); }, 200);
     });
   }
 
   if(document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded',function(){setTimeout(boot,100)});
+    document.addEventListener('DOMContentLoaded', function(){ setTimeout(boot,100); });
   }else{
     setTimeout(boot,100);
   }
 
   window.__sarinaSync={
     pull:function(){return pullRemote(true)},
+    hard:function(){return hardResetFromCloud()},
     push:function(){pushNow(true)},
     online:function(){return reallyOnline}
   };
-  console.log('sync-fix v6 loaded');
+  console.log('sync-fix v7 loaded');
 })();
