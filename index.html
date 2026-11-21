@@ -65,6 +65,10 @@ ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 .set-info{flex:1;min-width:0;display:flex;align-items:center;gap:10px}
 .set-actions{display:flex;gap:6px;flex-shrink:0}
 .set-actions .edit-btn{border:1.5px solid var(--accent);color:var(--accent-deep);background:var(--accent-soft);border-radius:10px;padding:4px 12px;font-size:12px;font-weight:700;min-height:36px}
+.chart-wrap{display:flex;align-items:flex-end;gap:3px;height:160px;overflow-x:auto;padding:8px 4px 0;direction:ltr}
+.chart-col{flex:1;min-width:14px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:4px}
+.chart-bar{width:70%;max-width:22px;border-radius:8px 8px 4px 4px;min-height:4px}
+.chart-lbl{font-size:9px;font-weight:700;color:var(--muted);white-space:nowrap}
 </style>
 </head>
 <body>
@@ -81,5 +85,6 @@ ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 <script src="weight.js"></script>
 <script src="settings-ui.js"></script>
 <script src="health-ui.js"></script>
+<script src="report-fix.js"></script>
 </body>
 </html>
