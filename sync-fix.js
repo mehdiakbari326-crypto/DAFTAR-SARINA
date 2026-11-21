@@ -1,10 +1,11 @@
-/* Sync v3: Firebase = source of truth; local = cache; theme device-local */
+/* Sync v4: kill old listeners, Firebase source of truth, never let empty wipe rich data */
 (function(){
   var THEME_KEY='daftar-theme-local';
   var hydrated=false;
   var writing=false;
   var pushTimer=null;
   var lastSig='';
+  var localUpdatedAt=0;
 
   function loadLocalTheme(){
     try{return localStorage.getItem(THEME_KEY)||null}catch(e){return null}
@@ -18,6 +19,32 @@
       S.theme=t;
       if(typeof applyTheme==='function')applyTheme();
     }
+  }
+
+  function richness(x){
+    if(!x)return 0;
+    var n=0;
+    try{
+      n+=(x.tasks&&x.tasks.length)||0;
+      n+=((x.rewards&&x.rewards.length)||0)*2;
+      n+=((x.healthItems&&x.healthItems.length)||0)*2;
+      n+=((x.posBehaviors&&x.posBehaviors.length)||0);
+      n+=((x.negBehaviors&&x.negBehaviors.length)||0);
+      n+=((x.claims&&x.claims.length)||0);
+      n+=((x.pendingChanges&&x.pendingChanges.length)||0);
+      if(x.days){
+        var keys=Object.keys(x.days);
+        n+=keys.length*3;
+        keys.forEach(function(k){
+          var d=x.days[k]||{};
+          if(d.tasks) n+=Object.keys(d.tasks).length;
+          if(d.notes) n+=(d.notes.length||0);
+          if(d.weight) n+=1;
+        });
+      }
+      if(x.streak) n+=x.streak;
+    }catch(e){}
+    return n;
   }
 
   function sharedFrom(Sref){
@@ -80,8 +107,8 @@
     }catch(e){}
   }
 
-  function pushNow(){
-    if(!hydrated){
+  function pushNow(force){
+    if(!hydrated&&!force){
       console.log('sync: skip push until hydrated');
       return;
     }
@@ -91,16 +118,32 @@
       return;
     }
     var payload=sharedFrom(S);
-    writing=true;
-    if(typeof ignoreRemote!=='undefined') ignoreRemote=true;
-    db.ref(FAMILY_PATH).update(payload).then(function(){
-      writing=false;
-      lastSig=sigOf(payload);
-      setTimeout(function(){
-        if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
-      },700);
-      setOnline(true);
-      try{if(typeof lsSave==='function')lsSave()}catch(e){}
+    db.ref(FAMILY_PATH).once('value').then(function(snap){
+      var remote=snap.val();
+      if(remote&&!force){
+        var rr=richness(remote), lr=richness(payload);
+        var remoteAt=remote._updatedAt||0;
+        if(rr>lr+3 && remoteAt>=localUpdatedAt){
+          console.log('sync: abort push, remote richer',rr,lr);
+          applyRemote(remote);
+          lastSig=sigOf(remote);
+          try{if(typeof render==='function')render()}catch(e){}
+          return;
+        }
+      }
+      writing=true;
+      if(typeof ignoreRemote!=='undefined') ignoreRemote=true;
+      localUpdatedAt=payload._updatedAt;
+      return db.ref(FAMILY_PATH).update(payload).then(function(){
+        writing=false;
+        lastSig=sigOf(payload);
+        setTimeout(function(){
+          if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
+        },800);
+        setOnline(true);
+        try{if(typeof lsSave==='function')lsSave()}catch(e){}
+        console.log('sync: pushed rich',richness(payload));
+      });
     }).catch(function(err){
       writing=false;
       if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
@@ -112,33 +155,40 @@
   function schedulePush(){
     try{if(typeof lsSave==='function')lsSave()}catch(e){}
     if(S&&S.theme) saveLocalTheme(S.theme);
+    localUpdatedAt=Date.now();
     if(pushTimer) clearTimeout(pushTimer);
-    pushTimer=setTimeout(pushNow,400);
+    pushTimer=setTimeout(function(){pushNow(false)},500);
   }
 
-  // Override saveProfile — never full set()
   saveProfile=function(){ schedulePush(); };
-
-  // Disable original listener overwrite by replacing startFirebaseSync
-  if(typeof startFirebaseSync==='function'){
-    startFirebaseSync=function(){
-      // no-op: v3 handles sync
-      setOnline(!!(typeof db!=='undefined'&&db));
-    };
-  }
+  startFirebaseSync=function(){ setOnline(!!(typeof db!=='undefined'&&db)); };
 
   function attach(){
     if(typeof db==='undefined'||!db)return false;
-    if(db._syncV3)return true;
-    db._syncV3=true;
+    if(db._syncV4)return true;
+    db._syncV4=true;
+
+    try{ db.ref(FAMILY_PATH).off(); }catch(e){}
 
     db.ref(FAMILY_PATH).once('value').then(function(snap){
       var r=snap.val();
+      var localR=richness(S);
       if(r){
-        applyRemote(r);
-        lastSig=sigOf(r);
-        console.log('sync: hydrated');
-      }else{
+        var remoteR=richness(r);
+        console.log('sync hydrate local',localR,'remote',remoteR);
+        if(remoteR>=localR){
+          applyRemote(r);
+          lastSig=sigOf(r);
+        }else{
+          lastSig=sigOf(r);
+          hydrated=true;
+          window.__sarinaHydrated=true;
+          pushNow(true);
+          setOnline(true);
+          try{if(typeof render==='function')render()}catch(e){}
+          return;
+        }
+      }else if(localR>0){
         writing=true;
         db.ref(FAMILY_PATH).update(sharedFrom(S)).then(function(){
           writing=false;
@@ -163,6 +213,13 @@
       if(!r)return;
       var s=sigOf(r);
       if(s===lastSig)return;
+      var remoteR=richness(r);
+      var localR=richness(S);
+      var remoteAt=r._updatedAt||0;
+      if(remoteR+2<localR && remoteAt<localUpdatedAt){
+        console.log('sync: ignore poorer older remote');
+        return;
+      }
       lastSig=s;
       applyRemote(r);
       hydrated=true;
@@ -178,12 +235,49 @@
   }
 
   document.addEventListener('click',function(e){
-    var t=e.target.closest('[data-act="theme"]');
+    var t=e.target.closest('[data-act]');
     if(!t)return;
-    setTimeout(function(){
-      if(S&&S.theme){saveLocalTheme(S.theme);applyLocalTheme();}
-    },30);
-  },false);
+    var a=t.getAttribute('data-act');
+    if(a==='theme'){
+      setTimeout(function(){
+        if(S&&S.theme){saveLocalTheme(S.theme);applyLocalTheme();}
+      },30);
+    }
+    if(a==='force-sync'){
+      e.preventDefault();
+      e.stopPropagation();
+      if(typeof db==='undefined'||!db){
+        if(typeof showToast==='function')showToast('اتصال برقرار نیست');
+        return;
+      }
+      db.ref(FAMILY_PATH).once('value').then(function(snap){
+        var r=snap.val();
+        if(r){
+          applyRemote(r);
+          lastSig=sigOf(r);
+          if(typeof showToast==='function')showToast('همگام شد ✓');
+          if(typeof render==='function')render();
+        }else{
+          pushNow(true);
+          if(typeof showToast==='function')showToast('داده محلی ارسال شد');
+        }
+      }).catch(function(){
+        if(typeof showToast==='function')showToast('خطا در همگام‌سازی');
+      });
+    }
+  },true);
+
+  var _settingsView=typeof settingsView==='function'?settingsView:null;
+  if(_settingsView){
+    settingsView=function(){
+      var html=_settingsView();
+      if(html.indexOf('force-sync')>=0)return html;
+      var btn='<section class="card"><div class="card-h"><h2>☁️ همگام‌سازی</h2></div>';
+      btn+='<p class="muted">اگر دو گوشی یکی نیستند این دکمه را بزنید</p>';
+      btn+='<button type="button" class="btn" data-act="force-sync" style="width:100%">دریافت آخرین داده از ابر</button></section>';
+      return html+btn;
+    };
+  }
 
   function boot(){
     applyLocalTheme();
@@ -191,7 +285,7 @@
     (function waitDb(){
       tries++;
       if(attach())return;
-      if(tries<50) setTimeout(waitDb,200);
+      if(tries<60) setTimeout(waitDb,200);
       else{hydrated=true;window.__sarinaHydrated=true;setOnline(false);}
     })();
 
@@ -202,21 +296,23 @@
         if(!r)return;
         var s=sigOf(r);
         if(s===lastSig)return;
+        var remoteR=richness(r), localR=richness(S);
+        if(remoteR+2<localR && (r._updatedAt||0)<localUpdatedAt)return;
         lastSig=s;
         applyRemote(r);
         hydrated=true;
         setOnline(true);
         try{if(typeof render==='function')render()}catch(e){}
       }).catch(function(){});
-    },5000);
+    },4000);
   }
 
   if(document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded',function(){setTimeout(boot,250)});
+    document.addEventListener('DOMContentLoaded',function(){setTimeout(boot,200)});
   }else{
-    setTimeout(boot,250);
+    setTimeout(boot,200);
   }
 
-  window.__sarinaSync={forcePush:pushNow,hydrated:function(){return hydrated}};
-  console.log('sync-fix v3 loaded');
+  window.__sarinaSync={forcePush:function(){pushNow(true)},hydrated:function(){return hydrated}};
+  console.log('sync-fix v4 loaded');
 })();
