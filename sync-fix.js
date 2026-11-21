@@ -1,4 +1,4 @@
-/* Sync v7: hard reset from cloud for stuck devices */
+/* Sync v8: auto hard-reset when local is empty-looking but cloud has real data */
 (function(){
   var THEME_KEY='daftar-theme-local';
   var PATH='family/sarina';
@@ -42,7 +42,7 @@
       el.className='toast';
       el.textContent=msg;
       document.body.appendChild(el);
-      setTimeout(function(){try{el.remove()}catch(e){}},2800);
+      setTimeout(function(){try{el.remove()}catch(e){}},3000);
     }catch(e){ try{alert(msg)}catch(x){} }
   }
 
@@ -88,6 +88,22 @@
     }catch(e){return String(Math.random())}
   }
 
+  function countHealthDates(items){
+    var n=0;
+    (items||[]).forEach(function(x){ if(x&&x.lastDate) n++; });
+    return n;
+  }
+
+  function localLooksEmpty(){
+    try{
+      var days=S.days?Object.keys(S.days).length:0;
+      var dated=countHealthDates(S.healthItems);
+      var streak=S.streak||0;
+      // empty if almost no day history and no health dates and zero streak
+      return days===0 && dated===0 && streak===0;
+    }catch(e){ return true; }
+  }
+
   function applyRemote(r){
     if(!r||typeof r!=='object')return false;
     S.name = r.name!=null ? r.name : (S.name||'سارینا');
@@ -117,9 +133,8 @@
     var t=(r.tasks&&r.tasks.length)||0;
     var d=r.days?Object.keys(r.days).length:0;
     var rw=(r.rewards&&r.rewards.length)||0;
-    var withDate=0;
-    if(r.healthItems){ r.healthItems.forEach(function(x){ if(x&&x.lastDate) withDate++; }); }
-    return 'تسک '+t+' | سلامتی '+h+' ('+withDate+' تاریخ‌دار) | روز '+d+' | پاداش '+rw;
+    var withDate=countHealthDates(r.healthItems);
+    return 'تسک '+t+' | سلامتی '+h+' ('+withDate+' تاریخ) | روز '+d+' | پاداش '+rw;
   }
 
   function pullRemote(showMsg){
@@ -138,13 +153,27 @@
         window.__sarinaHydrated=true;
         return false;
       }
+
+      var remoteDated=countHealthDates(r.healthItems);
+      var remoteDays=r.days?Object.keys(r.days).length:0;
+      var remoteHasData=remoteDated>0||remoteDays>0||(r.streak||0)>0;
+
       applyRemote(r);
       lastSig=sigOf(r);
       hydrated=true;
       pulledOnce=true;
       window.__sarinaHydrated=true;
+
       try{ if(typeof render==='function') render(); }catch(e){ console.log(e); }
+
       if(showMsg) toast('از ابر: '+summarize(r)+' ✓');
+
+      // If this device looked empty and cloud has real data, reload UI shell once
+      if(remoteHasData && showMsg){
+        setTimeout(function(){
+          try{ if(typeof render==='function') render(); }catch(e){}
+        }, 100);
+      }
       return true;
     }).catch(function(err){
       console.log('pull error',err);
@@ -165,7 +194,7 @@
     try{
       S.tasks=[]; S.days={}; S.rewards=[]; S.claims=[];
       S.posBehaviors=[]; S.negBehaviors=[]; S.healthItems=[];
-      S.pendingChanges=[]; S.streak=0;
+      S.pendingChanges=[]; S.streak=0; S.goal=15;
     }catch(e){}
     return pullRemote(true).then(function(ok){
       try{
@@ -178,7 +207,9 @@
       if(ok){
         setTimeout(function(){
           try{ location.reload(); }catch(e){}
-        }, 600);
+        }, 500);
+      }else{
+        toast('بازنشانی ناموفق — اینترنت را چک کنید');
       }
       return ok;
     });
@@ -187,6 +218,11 @@
   function pushNow(force){
     if(!pulledOnce && !force){
       console.log('sync: block push until first pull');
+      return;
+    }
+    // Never push empty-looking local over cloud
+    if(localLooksEmpty() && !force){
+      console.log('sync: block push of empty local');
       return;
     }
     if(!hydrated&&!force)return;
@@ -219,6 +255,7 @@
     try{ if(typeof lsSave==='function') lsSave(); }catch(e){}
     if(S&&S.theme) saveLocalTheme(S.theme);
     if(!pulledOnce)return;
+    if(localLooksEmpty())return;
     if(pushTimer) clearTimeout(pushTimer);
     pushTimer=setTimeout(function(){ pushNow(false); }, 800);
   }
@@ -239,13 +276,20 @@
   function attach(){
     var database=getDb();
     if(!database)return false;
-    if(database._syncV7)return true;
-    database._syncV7=true;
+    if(database._syncV8)return true;
+    database._syncV8=true;
 
     try{ database.ref(getPath()).off(); }catch(e){}
     watchConnection();
 
+    // First pull: if local empty and cloud full, hard-apply + reload once
+    var wasEmpty=localLooksEmpty();
     pullRemote(false).then(function(ok){
+      if(ok && wasEmpty && !localLooksEmpty()){
+        toast('داده از ابر بارگذاری شد');
+        setTimeout(function(){ try{ location.reload(); }catch(e){} }, 400);
+        return;
+      }
       if(!ok){
         var hasLocal=(S.tasks&&S.tasks.length)||(S.healthItems&&S.healthItems.some(function(x){return x&&x.lastDate;}));
         if(hasLocal){ pulledOnce=true; pushNow(true); }
@@ -299,8 +343,9 @@
     if(html.indexOf('data-act="hard-sync"')>=0) return html;
     var bar='<div style="display:flex;flex-direction:column;gap:8px;align-items:center;margin:6px 0 12px">';
     bar+='<button type="button" class="btn" data-act="force-sync" style="width:80%;background:linear-gradient(90deg,#6B3FBF,#9B6DFF)">☁️ همگام‌سازی با ابر</button>';
-    bar+='<button type="button" class="ghost" data-act="hard-sync" style="font-size:12px;font-weight:700">🔄 بازنشانی کامل از ابر</button>';
+    bar+='<button type="button" class="ghost" data-act="hard-sync" style="font-size:12px;font-weight:700">🔄 بازنشانی کامل از ابر (برای گوشی دیگر)</button>';
     bar+='</div>';
+    // remove older single button wrappers if present
     html=html.replace(/<div[^>]*>\s*<button[^>]*data-act="force-sync"[\s\S]*?<\/div>/,'');
     return html.replace(/(<section class="card")/, bar+'$1');
   }
@@ -320,7 +365,7 @@
       var html=_settingsView();
       if(html.indexOf('data-act="hard-sync"')>=0) return html;
       var btn='<section class="card"><div class="card-h"><h2>☁️ همگام‌سازی</h2></div>';
-      btn+='<p class="muted">اگر گوشی دیگر داده دارد و این گوشی نه، بازنشانی کامل را بزنید</p>';
+      btn+='<p class="muted">روی گوشی که داده ناقص دارد «بازنشانی کامل» را بزنید</p>';
       btn+='<button type="button" class="btn" data-act="force-sync" style="width:100%;margin-bottom:8px">دریافت از ابر</button>';
       btn+='<button type="button" class="ghost" data-act="hard-sync" style="width:100%">🔄 بازنشانی کامل از ابر</button></section>';
       return html+btn;
@@ -354,5 +399,5 @@
     push:function(){pushNow(true)},
     online:function(){return reallyOnline}
   };
-  console.log('sync-fix v7 loaded');
+  console.log('sync-fix v8 loaded');
 })();
