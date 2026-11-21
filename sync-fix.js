@@ -1,4 +1,4 @@
-/* Sync v7: hard reset from cloud, no push before pull, keep role/theme */
+/* Sync v7: hard reset from cloud for stuck devices */
 (function(){
   var THEME_KEY='daftar-theme-local';
   var PATH='family/sarina';
@@ -156,14 +156,12 @@
 
   function hardResetFromCloud(){
     toast('بازنشانی از ابر...');
-    // Keep role + theme only
     var role='', theme=loadLocalTheme();
     try{ role=localStorage.getItem('daftar-device-role-v2')||localStorage.getItem('daftar-device-role-backup')||''; }catch(e){}
     try{
       localStorage.removeItem('daftar-sarina-v9');
       localStorage.removeItem('daftar-sarina-backup-v9');
     }catch(e){}
-    // Clear in-memory shared state before pull
     try{
       S.tasks=[]; S.days={}; S.rewards=[]; S.claims=[];
       S.posBehaviors=[]; S.negBehaviors=[]; S.healthItems=[];
@@ -220,7 +218,7 @@
   function schedulePush(){
     try{ if(typeof lsSave==='function') lsSave(); }catch(e){}
     if(S&&S.theme) saveLocalTheme(S.theme);
-    if(!pulledOnce)return; // never upload before download
+    if(!pulledOnce)return;
     if(pushTimer) clearTimeout(pushTimer);
     pushTimer=setTimeout(function(){ pushNow(false); }, 800);
   }
@@ -303,7 +301,6 @@
     bar+='<button type="button" class="btn" data-act="force-sync" style="width:80%;background:linear-gradient(90deg,#6B3FBF,#9B6DFF)">☁️ همگام‌سازی با ابر</button>';
     bar+='<button type="button" class="ghost" data-act="hard-sync" style="font-size:12px;font-weight:700">🔄 بازنشانی کامل از ابر</button>';
     bar+='</div>';
-    // remove older single button if present
     html=html.replace(/<div[^>]*>\s*<button[^>]*data-act="force-sync"[\s\S]*?<\/div>/,'');
     return html.replace(/(<section class="card")/, bar+'$1');
   }
@@ -322,7 +319,7 @@
     settingsView=function(){
       var html=_settingsView();
       if(html.indexOf('data-act="hard-sync"')>=0) return html;
-      var btn='<section class="card"><div class="h2">☁️ همگام‌سازی</h2></div>';
+      var btn='<section class="card"><div class="card-h"><h2>☁️ همگام‌سازی</h2></div>';
       btn+='<p class="muted">اگر گوشی دیگر داده دارد و این گوشی نه، بازنشانی کامل را بزنید</p>';
       btn+='<button type="button" class="btn" data-act="force-sync" style="width:100%;margin-bottom:8px">دریافت از ابر</button>';
       btn+='<button type="button" class="ghost" data-act="hard-sync" style="width:100%">🔄 بازنشانی کامل از ابر</button></section>';
