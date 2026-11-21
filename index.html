@@ -53,9 +53,6 @@ ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 .theme-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.theme-btn{border:2px solid var(--line);border-radius:16px;padding:14px 10px;text-align:center;background:var(--surface);font-weight:700}
 .theme-btn.active{border-color:var(--accent)}.range-btns{display:flex;gap:6px;flex-wrap:wrap}.range-btns button{border:1.5px solid var(--line);background:var(--surface);border-radius:99px;padding:5px 14px;font-size:12.5px;font-weight:700}
 .range-btns button.active{background:var(--accent);color:#fff}
-.health-row{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
-.health-chip{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 12px;border-radius:16px;background:var(--accent-soft);border:1.5px solid var(--line);min-width:64px}
-.health-chip.ok{background:var(--pos-soft);border-color:var(--pos)}
 .cal-card,.fun-cal{display:grid;grid-template-columns:48px 1fr 48px;align-items:center;gap:8px;background:linear-gradient(145deg,#F3ECFF,#FFEAF4 60%,#FFF6D6);border:2px solid #E9D5FF;border-radius:24px;padding:14px 10px}
 .cal-nav{width:44px;height:44px;border-radius:50%;border:2px solid var(--accent);background:#fff;color:var(--accent-deep);font-size:22px;font-weight:800}
 .cal-mid{text-align:center}.cal-date{font-weight:800;font-size:14px}.cal-badge{display:inline-block;background:linear-gradient(90deg,var(--accent),var(--pink));color:#fff;border-radius:99px;padding:3px 14px;font-size:11px;font-weight:800}
@@ -64,6 +61,10 @@ ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 .prize-tabs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
 .prize-box{background:#fff;border:2px solid var(--line);border-radius:18px;padding:12px 8px;text-align:center}
 .badge-row{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}.ach{background:var(--accent-soft);color:var(--accent-deep);border-radius:99px;padding:4px 12px;font-size:12px;font-weight:800}
+.set-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 0;border-top:1px solid var(--line)}
+.set-info{flex:1;min-width:0;display:flex;align-items:center;gap:10px}
+.set-actions{display:flex;gap:6px;flex-shrink:0}
+.set-actions .edit-btn{border:1.5px solid var(--accent);color:var(--accent-deep);background:var(--accent-soft);border-radius:10px;padding:4px 12px;font-size:12px;font-weight:700;min-height:36px}
 </style>
 </head>
 <body>
@@ -79,5 +80,6 @@ ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 <script src="enhance.js"></script>
 <script src="weight.js"></script>
 <script src="settings-ui.js"></script>
+<script src="health-ui.js"></script>
 </body>
 </html>
