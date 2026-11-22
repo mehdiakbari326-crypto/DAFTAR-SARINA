@@ -1,4 +1,4 @@
-/* Weight tracking: daily log, parent approve, kid chart, interpolate, weekly trend */
+/* Weight tracking — full panel only on Health tab (no duplicate on Today) */
 (function(){
   try{
     var st=document.createElement('style');
@@ -57,7 +57,6 @@
       }
       return;
     }
-    // child → pending approval
     if(typeof addPending==='function'){
       addPending('weight',{k:k,w:w},'وزن امروز: '+w+' کیلو');
       showToast('درخواست وزن برای والدین ارسال شد 🔔');
@@ -65,43 +64,30 @@
     }
   }
 
-  /* series for last N days: {k, w, real} real=false if interpolated */
   function weightSeries(n){
     n=n||14;
     var keys=[];
     for(var i=n-1;i>=0;i--) keys.push(addDays(todayKey(),-i));
     var raw=keys.map(function(k){return {k:k,w:getWeight(k)}});
-    // find known points
     var known=[];
     raw.forEach(function(p,i){if(p.w!=null) known.push({i:i,w:p.w})});
     if(!known.length) return raw.map(function(p){return {k:p.k,w:null,real:false}});
-
     var out=[];
     for(var i=0;i<raw.length;i++){
-      if(raw[i].w!=null){
-        out.push({k:raw[i].k,w:raw[i].w,real:true});
-        continue;
-      }
-      // interpolate between nearest known left/right
+      if(raw[i].w!=null){ out.push({k:raw[i].k,w:raw[i].w,real:true}); continue; }
       var left=null,right=null;
       for(var a=known.length-1;a>=0;a--){if(known[a].i<i){left=known[a];break}}
       for(var b=0;b<known.length;b++){if(known[b].i>i){right=known[b];break}}
       var val=null;
-      if(left&&right){
-        var t=(i-left.i)/(right.i-left.i);
-        val=left.w+(right.w-left.w)*t;
-      }else if(left){
-        val=left.w; // hold last
-      }else if(right){
-        val=right.w;
-      }
+      if(left&&right){ var t=(i-left.i)/(right.i-left.i); val=left.w+(right.w-left.w)*t; }
+      else if(left) val=left.w;
+      else if(right) val=right.w;
       out.push({k:raw[i].k,w:val==null?null:Math.round(val*10)/10,real:false});
     }
     return out;
   }
 
   function weekTrendMsg(){
-    // compare average of last 3 days with previous 3 days (using real weights only)
     var recent=[],prev=[];
     for(var i=0;i<3;i++){
       var w1=getWeight(addDays(todayKey(),-i));
@@ -115,69 +101,40 @@
     var avg=function(a){return a.reduce(function(x,y){return x+y},0)/a.length};
     var r=avg(recent),p=avg(prev);
     var diff=Math.round((r-p)*10)/10;
-    if(diff<=-0.2){
-      return {cls:'down',text:'🌟 آفرین سارینا! روند وزنت این هفته کاهشی بوده ('+fa(Math.abs(diff))+' کیلو کمتر). عالی پیش میری!'};
-    }
-    if(diff>=0.2){
-      return {cls:'up',text:'💜 سارینا جان، روند وزن این هفته کمی افزایشی بوده (+'+fa(diff)+' کیلو). با هم مواظب خوراکی‌ها می‌شیم!'};
-    }
-    return {cls:'same',text:'✨ وزن این هفته تقریباً ثابت مانده. چه تعادل قشنگی!'};
+    if(diff<=-0.2) return {cls:'down',text:'🌟 آفرین! روند وزن این هفته کاهشی بوده ('+fa(Math.abs(diff))+' کیلو کمتر).'};
+    if(diff>=0.2) return {cls:'up',text:'💜 روند وزن این هفته کمی افزایشی بوده (+'+fa(diff)+' کیلو).'};
+    return {cls:'same',text:'✨ وزن این هفته تقریباً ثابت مانده.'};
   }
 
   function buildChart(series){
     var pts=series.filter(function(p){return p.w!=null});
     if(pts.length<1){
-      return '<div style="text-align:center;padding:24px"><div style="font-size:40px">🦄</div><p class="muted">هنوز وزنی ثبت نشده. اولین وزن را وارد کن!</p></div>';
+      return '<div style="text-align:center;padding:24px"><div style="font-size:40px">🦄</div><p class="muted">هنوز وزنی ثبت نشده.</p></div>';
     }
     var ws=pts.map(function(p){return p.w});
-    var minW=Math.min.apply(null,ws);
-    var maxW=Math.max.apply(null,ws);
+    var minW=Math.min.apply(null,ws), maxW=Math.max.apply(null,ws);
     if(maxW===minW){minW-=0.5;maxW+=0.5}
     var pad=Math.max(0.3,(maxW-minW)*0.15);
-    minW-=pad;maxW+=pad;
-
+    minW-=pad; maxW+=pad;
     var W=320,H=180,L=28,R=12,T=16,B=28;
-    var iw=W-L-R, ih=H-T-B;
-    var n=series.length;
-
+    var iw=W-L-R, ih=H-T-B, n=series.length;
     function xAt(i){return L+(n<=1?iw/2:(i/(n-1))*iw)}
     function yAt(w){return T+ih-((w-minW)/(maxW-minW))*ih}
-
-    // path
-    var d='';
+    var d='', area='', first=true, lastX=L;
     series.forEach(function(p,i){
       if(p.w==null)return;
       var x=xAt(i),y=yAt(p.w);
       d+=(d?' L ':'M ')+x.toFixed(1)+' '+y.toFixed(1);
-    });
-
-    // area under curve
-    var area='';
-    var first=true,lastX=L;
-    series.forEach(function(p,i){
-      if(p.w==null)return;
-      var x=xAt(i),y=yAt(p.w);
-      if(first){area='M '+x.toFixed(1)+' '+(T+ih)+' L '+x.toFixed(1)+' '+y.toFixed(1);first=false}
+      if(first){area='M '+x.toFixed(1)+' '+(T+ih)+' L '+x.toFixed(1)+' '+y.toFixed(1);first=false;}
       else area+=' L '+x.toFixed(1)+' '+y.toFixed(1);
       lastX=x;
     });
     if(!first) area+=' L '+lastX.toFixed(1)+' '+(T+ih)+' Z';
-
     var svg='<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">';
-    // soft grid
-    for(var g=0;g<4;g++){
-      var gy=T+(ih/3)*g;
-      svg+='<line x1="'+L+'" y1="'+gy+'" x2="'+(W-R)+'" y2="'+gy+'" stroke="#EDE9FE" stroke-width="1"/>';
-    }
-    // gradient area
-    svg+='<defs><linearGradient id="wg" x1="0" y1="0" x2="0" y2="1">';
-    svg+='<stop offset="0%" stop-color="#C4B5FD" stop-opacity="0.55"/>';
-    svg+='<stop offset="100%" stop-color="#FBCFE8" stop-opacity="0.05"/>';
-    svg+='</linearGradient></defs>';
+    for(var g=0;g<4;g++){ var gy=T+(ih/3)*g; svg+='<line x1="'+L+'" y1="'+gy+'" x2="'+(W-R)+'" y2="'+gy+'" stroke="#EDE9FE" stroke-width="1"/>'; }
+    svg+='<defs><linearGradient id="wg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#C4B5FD" stop-opacity="0.55"/><stop offset="100%" stop-color="#FBCFE8" stop-opacity="0.05"/></linearGradient></defs>';
     if(area) svg+='<path d="'+area+'" fill="url(#wg)"/>';
-    // line
     if(d) svg+='<path d="'+d+'" fill="none" stroke="#8B5CF6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>';
-    // points
     series.forEach(function(p,i){
       if(p.w==null)return;
       var x=xAt(i),y=yAt(p.w);
@@ -188,11 +145,9 @@
         svg+='<circle cx="'+x+'" cy="'+y+'" r="4" fill="#F9A8D4" stroke="#EC4899" stroke-width="1.5" stroke-dasharray="2 1"/>';
       }
     });
-    // x labels: first, mid, last
     [0,Math.floor((n-1)/2),n-1].forEach(function(i){
       if(i<0||i>=n)return;
-      var label=series[i].k.slice(5); // MM-DD
-      svg+='<text x="'+xAt(i)+'" y="'+(H-6)+'" text-anchor="middle" font-size="9" fill="#7C3AED">'+label+'</text>';
+      svg+='<text x="'+xAt(i)+'" y="'+(H-6)+'" text-anchor="middle" font-size="9" fill="#7C3AED">'+series[i].k.slice(5)+'</text>';
     });
     svg+='</svg>';
     return svg;
@@ -205,71 +160,46 @@
     var trend=weekTrendMsg();
     var h='<section class="weight-card">';
     h+='<h2>⚖️ وزن سارینا</h2>';
-    if(todayW!=null){
-      h+='<div class="weight-today">امروز: <b>'+fa(todayW)+'</b> کیلوگرم</div>';
-    }else{
-      h+='<div class="weight-today">امروز هنوز وزن ثبت نشده</div>';
-    }
+    h+=(todayW!=null)
+      ? '<div class="weight-today">امروز: <b>'+fa(todayW)+'</b> کیلوگرم</div>'
+      : '<div class="weight-today">امروز هنوز وزن ثبت نشده</div>';
     h+='<form class="weight-form" id="weightForm">';
     h+='<input id="weightIn" type="text" inputmode="decimal" placeholder="مثلاً ۲۵.۵" value="'+(todayW!=null?todayW:'')+'">';
-    h+='<button class="btn" type="submit">ثبت</button>';
-    h+='</form>';
+    h+='<button class="btn" type="submit">ثبت</button></form>';
     if(!isParent&&deviceRole!=='parent'){
       h+='<p class="muted" style="margin:0;text-align:center;font-size:12px">بعد از ثبت، والدین باید تأیید کنند 💜</p>';
     }
     h+='<div class="weight-trend '+trend.cls+'">'+trend.text+'</div>';
     h+='<div class="weight-chart-wrap">'+buildChart(series)+'</div>';
-    h+='<div class="weight-legend">';
-    h+='<span><i class="weight-dot"></i> ثبت‌شده</span>';
-    h+='<span><i class="weight-dot interp"></i> روزهای بدون داده (تقریبی)</span>';
-    h+='</div></section>';
+    h+='<div class="weight-legend"><span><i class="weight-dot"></i> ثبت‌شده</span><span><i class="weight-dot interp"></i> تقریبی</span></div>';
+    h+='</section>';
     return h;
   }
 
-  // inject into health view and today view
+  // ONLY on health tab
   var _healthView=typeof healthView==='function'?healthView:null;
   if(_healthView){
-    healthView=function(){
-      return weightPanel()+_healthView();
-    };
+    healthView=function(){ return weightPanel()+_healthView(); };
   }
 
+  // Remove any weight card accidentally left on today
   var _todayView=typeof todayView==='function'?todayView:null;
   if(_todayView){
-    var prevToday=todayView;
     todayView=function(){
-      var html=prevToday();
-      // add compact weight entry near end before prizes if not present
-      if(html.indexOf('weight-card')<0){
-        // keep full panel mainly on health; on today show mini
-        var k=todayKey();
-        var tw=getWeight(k);
-        var mini='<section class="weight-card" style="padding:12px">';
-        mini+='<h2>⚖️ وزن امروز</h2>';
-        mini+='<form class="weight-form" id="weightFormToday">';
-        mini+='<input id="weightInToday" type="text" inputmode="decimal" placeholder="کیلوگرم" value="'+(tw!=null?tw:'')+'">';
-        mini+='<button class="btn" type="submit">ثبت</button></form>';
-        mini+='<p class="muted" style="margin:0;text-align:center;font-size:12px">نمودار کامل در تب 🥗 سلامتی</p></section>';
-        if(html.indexOf('prizes-card')>=0){
-          html=html.replace('<section class="card prizes-card">', mini+'<section class="card prizes-card">');
-        }else{
-          html+=mini;
-        }
-      }
+      var html=_todayView();
+      html=html.replace(/<section class="weight-card"[\s\S]*?<\/section>/g,'');
       return html;
     };
   }
 
   document.addEventListener('submit',function(e){
     var form=e.target;
-    if(form.id==='weightForm'||form.id==='weightFormToday'){
-      e.preventDefault();
-      e.stopPropagation();
-      var id=form.id==='weightForm'?'weightIn':'weightInToday';
-      var el=document.getElementById(id);
+    if(form.id==='weightForm'){
+      e.preventDefault(); e.stopPropagation();
+      var el=document.getElementById('weightIn');
       submitWeight(el&&el.value);
     }
   },true);
 
-  console.log('weight.js loaded');
+  console.log('weight.js v2');
 })();

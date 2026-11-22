@@ -31,7 +31,6 @@ jobs:
           NAME="1.${{ github.run_number }}"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          echo "VersionName=$NAME versionCode=$CODE"
 
       - name: Prepare web files
         env:
@@ -42,7 +41,7 @@ jobs:
           set -e
           mkdir -p www
           cp index.html www/index.html
-          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js; do
+          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js ui-polish.js; do
             if [ -f "$f" ]; then cp "$f" "www/$f"; echo "copied $f"; fi
           done
           BLOB_SHA="25a039f0a5ae4cee254e40e37f7a4445ab664e47"
@@ -50,7 +49,6 @@ jobs:
           test "$(wc -c < www/app.js)" -gt 10000
           printf "%s\n" "window.APP_VERSION='${APP_VERSION}';" "window.APP_VERSION_CODE=${APP_VERSION_CODE};" "(function(){function p(){try{var v=window.APP_VERSION||'?';document.querySelectorAll('.rule').forEach(function(el){if(el&&el.textContent.indexOf('v')<0){el.textContent=el.textContent+' • v'+v}});var h1=document.querySelector('.hero h1,.fun-hero h1');if(h1&&!document.getElementById('verBadge')){var b=document.createElement('span');b.id='verBadge';b.textContent='v'+v;b.style.cssText='margin-right:8px;font-size:11px;opacity:.9;background:rgba(255,255,255,.25);padding:2px 8px;border-radius:99px;font-weight:800';h1.appendChild(b);}}catch(e){}}setTimeout(p,500);setTimeout(p,1500);setInterval(p,4000);})();" > www/version.js
           grep -q 'version.js' www/index.html || sed -i 's|</body>|<script src="version.js"></script>\n</body>|' www/index.html
-          grep -q 'report-fix.js' www/index.html || sed -i 's|</body>|<script src="report-fix.js"></script>\n</body>|' www/index.html
           ls -la www/
 
       - name: Install Capacitor
@@ -66,44 +64,14 @@ jobs:
         run: |
           set -e
           mkdir -p android/app
-          if [ -f debug.keystore.b64 ]; then
-            base64 -d debug.keystore.b64 > android/app/debug.keystore
-            echo "keystore ready"
-          else
-            echo "WARNING: no fixed keystore"
-          fi
+          if [ -f debug.keystore.b64 ]; then base64 -d debug.keystore.b64 > android/app/debug.keystore; fi
           GRADLE=android/app/build.gradle
           test -f "$GRADLE"
           sed -i 's/applicationId .*/applicationId "com.daftar.roozane"/' "$GRADLE"
-          if grep -q versionCode "$GRADLE"; then
-            sed -i "s/versionCode .*/versionCode ${APP_VERSION_CODE}/" "$GRADLE"
-          else
-            sed -i "/applicationId/a\        versionCode ${APP_VERSION_CODE}" "$GRADLE"
-          fi
-          if grep -q versionName "$GRADLE"; then
-            sed -i "s/versionName .*/versionName \"${APP_VERSION}\"/" "$GRADLE"
-          else
-            sed -i "/versionCode/a\        versionName \"${APP_VERSION}\"" "$GRADLE"
-          fi
-          printf '%s\n' \
-            'android {' \
-            '    signingConfigs {' \
-            '        fixedDebug {' \
-            '            storeFile file("debug.keystore")' \
-            '            storePassword "android"' \
-            '            keyAlias "androiddebugkey"' \
-            '            keyPassword "android"' \
-            '        }' \
-            '    }' \
-            '    buildTypes {' \
-            '        debug {' \
-            '            signingConfig signingConfigs.fixedDebug' \
-            '        }' \
-            '    }' \
-            '}' \
-            > android/app/signing.gradle
+          if grep -q versionCode "$GRADLE"; then sed -i "s/versionCode .*/versionCode ${APP_VERSION_CODE}/" "$GRADLE"; else sed -i "/applicationId/a\        versionCode ${APP_VERSION_CODE}" "$GRADLE"; fi
+          if grep -q versionName "$GRADLE"; then sed -i "s/versionName .*/versionName \"${APP_VERSION}\"/" "$GRADLE"; else sed -i "/versionCode/a\        versionName \"${APP_VERSION}\"" "$GRADLE"; fi
+          printf '%s\n' 'android {' '    signingConfigs {' '        fixedDebug {' '            storeFile file("debug.keystore")' '            storePassword "android"' '            keyAlias "androiddebugkey"' '            keyPassword "android"' '        }' '    }' '    buildTypes {' '        debug {' '            signingConfig signingConfigs.fixedDebug' '        }' '    }' '}' > android/app/signing.gradle
           grep -q "signing.gradle" "$GRADLE" || echo "apply from: 'signing.gradle'" >> "$GRADLE"
-          grep -A20 defaultConfig "$GRADLE" || true
 
       - name: Add notification permissions
         run: |
@@ -131,7 +99,6 @@ jobs:
           SRC=android/app/build/outputs/apk/debug/app-debug.apk
           OUT=android/app/build/outputs/apk/debug/daftar-sarina-v${APP_VERSION}.apk
           cp "$SRC" "$OUT"
-          ls -la android/app/build/outputs/apk/debug/
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
