@@ -1,8 +1,7 @@
-/* Sync v15 — auto sync every 3s + multi-device guards
- * 1) Always pull before push
- * 2) Never overwrite richer cloud with poorer local
- * 3) Hard reset clears local and reloads from cloud
- * 4) Clear toasts with counts so user sees truth
+/* Sync v16 — instant on change, quiet when idle
+ * - After ANY save/register → push immediately
+ * - Pull only on open / return to app / manual button
+ * - No 3s polling spam
  */
 (function(){
   var THEME_KEY='daftar-theme-local';
@@ -10,13 +9,14 @@
   var DEFAULT_CLOUD='https://sarina-kv.mehdiakbari326.workers.dev';
   var hydrated=false, pulledOnce=false, writing=false, pushTimer=null;
   var lastSig='', online=false, lastSummary='', quietUntil=0, bootId=String(Date.now());
+  var busy=false;
 
   function toast(msg){
     try{ if(typeof showToast==='function'){ showToast(msg); return; } }catch(e){}
     try{
       var el=document.createElement('div'); el.className='toast'; el.textContent=msg;
       document.body.appendChild(el);
-      setTimeout(function(){try{el.remove()}catch(e){}},4000);
+      setTimeout(function(){try{el.remove()}catch(e){}},3500);
     }catch(e){}
   }
 
@@ -60,9 +60,7 @@
 
   function richness(r){
     if(!r||typeof r!=='object') return 0;
-    var days=r.days||{};
-    var dayN=Object.keys(days).length;
-    var marks=0, notes=0, weights=0, beh=0;
+    var days=r.days||{}, marks=0, notes=0, weights=0, beh=0;
     Object.keys(days).forEach(function(k){
       var d=days[k]||{};
       marks += d.tasks ? Object.keys(d.tasks).length : 0;
@@ -71,11 +69,7 @@
       beh += d.behaviors ? Object.keys(d.behaviors).length : 0;
     });
     return (r.tasks&&r.tasks.length||0)*3
-      + dayN*8
-      + marks*4
-      + notes*2
-      + weights*5
-      + beh*3
+      + Object.keys(days).length*8 + marks*4 + notes*2 + weights*5 + beh*3
       + (r.healthItems&&r.healthItems.length||0)*2
       + (r.rewards&&r.rewards.length||0)*2
       + (r.posBehaviors&&r.posBehaviors.length||0)
@@ -145,9 +139,8 @@
 
   function summarize(r){
     if(!r) return 'خالی';
-    var days=r.days?Object.keys(r.days).length:0;
     return 'تسک '+(r.tasks&&r.tasks.length||0)+
-      ' | روز '+days+
+      ' | روز '+(r.days?Object.keys(r.days).length:0)+
       ' | سلامتی '+(r.healthItems&&r.healthItems.length||0)+
       ' | پاداش '+(r.rewards&&r.rewards.length||0)+
       ' | هدف '+(r.goal!=null?r.goal:'—');
@@ -159,9 +152,7 @@
 
   function httpGet(url){
     return fetch(url+(url.indexOf('?')>=0?'&':'?')+'t='+Date.now(), {
-      method:'GET',
-      headers:{'Accept':'application/json'},
-      cache:'no-store'
+      method:'GET', headers:{'Accept':'application/json'}, cache:'no-store'
     }).then(function(res){
       if(!res.ok) throw new Error('GET '+res.status);
       return res.json();
@@ -180,13 +171,11 @@
   }
 
   function mergeDays(a, b){
-    var out={};
-    var keys={};
+    var out={}, keys={};
     Object.keys(a||{}).forEach(function(k){ keys[k]=1; });
     Object.keys(b||{}).forEach(function(k){ keys[k]=1; });
     Object.keys(keys).forEach(function(k){
-      var da=(a&&a[k])||{};
-      var db=(b&&b[k])||{};
+      var da=(a&&a[k])||{}, db=(b&&b[k])||{};
       var score=function(d){
         return (d.tasks?Object.keys(d.tasks).length:0)*3
           + ((d.notes&&d.notes.length)||0)
@@ -207,7 +196,7 @@
         });
       }
       if(da.notes || db.notes){
-        var seen={}; var notes=[];
+        var seen={}, notes=[];
         ((da.notes)||[]).concat((db.notes)||[]).forEach(function(n){
           var id=n&&n.id; if(id&&seen[id]) return; if(id) seen[id]=1; notes.push(n);
         });
@@ -229,73 +218,58 @@
     return httpGet(url).then(function(remote){
       setDot(true);
       if(!remote || (!remote.tasks && !remote.days && !remote.healthItems)){
-        if(showMsg) toast('ابر خالی است — اول از گوشی اصلی ارسال کامل بزنید');
+        if(showMsg) toast('ابر خالی است');
         pulledOnce=true; hydrated=true;
         return false;
       }
-
-      var localR = localRichness();
-      var remoteR = richness(remote);
-      var take = true;
-      if(!showMsg){
-        if(remoteR < localR * 0.5 && localR > 20){
-          take = false;
-          pulledOnce=true; hydrated=true;
-          quietUntil = Date.now() + 500;
-          schedulePush(true);
-          return true;
-        }
+      var localR=localRichness(), remoteR=richness(remote);
+      if(!showMsg && remoteR < localR*0.5 && localR>20){
+        pulledOnce=true; hydrated=true;
+        // local richer — push it
+        quietUntil=0;
+        schedulePush(true);
+        return true;
       }
-
-      if(take){
-        try{
-          if(S && S.days && remote.days){
-            remote = clone(remote);
-            remote.days = mergeDays(S.days, remote.days);
-          }
-        }catch(e){}
-
-        var prevSig = lastSig;
-        var newSig = sigOf(remote);
-        applyRemote(remote);
-        lastSig = newSig;
-        quietUntil = Date.now() + 600;
-        hydrated=true; pulledOnce=true; window.__sarinaHydrated=true;
-        if(prevSig && prevSig !== newSig){
-          try{ if(typeof render==='function') render(); }catch(e){}
-        }else if(showMsg){
-          try{ if(typeof render==='function') render(); }catch(e){}
+      try{
+        if(S && S.days && remote.days){
+          remote=clone(remote);
+          remote.days=mergeDays(S.days, remote.days);
         }
-        if(showMsg) toast('✓ دریافت شد — '+summarize(remote));
+      }catch(e){}
+      var prevSig=lastSig, newSig=sigOf(remote);
+      applyRemote(remote);
+      lastSig=newSig;
+      quietUntil=Date.now()+400;
+      hydrated=true; pulledOnce=true; window.__sarinaHydrated=true;
+      if(showMsg || (prevSig && prevSig!==newSig)){
+        try{ if(typeof render==='function') render(); }catch(e){}
       }
+      if(showMsg) toast('✓ دریافت شد — '+summarize(remote));
       return true;
     }).catch(function(err){
-      console.log('pull fail', err);
       setDot(false);
-      if(showMsg) toast('خطا در دریافت: '+(err&&err.message||err));
+      if(showMsg) toast('خطا: '+(err&&err.message||err));
       return false;
     });
   }
 
   function push(force){
-    if(Date.now() < quietUntil && !force) return Promise.resolve(false);
+    if(Date.now()<quietUntil && !force) return Promise.resolve(false);
     if(!pulledOnce && !force) return Promise.resolve(false);
     var url=cloudUrl();
     if(!url) return Promise.resolve(false);
 
-    var localPayload = sharedFrom(S);
-    var localR = richness(localPayload);
-    if(localR < 5 && !force){
-      return Promise.resolve(false);
-    }
+    var localPayload=sharedFrom(S);
+    var localR=richness(localPayload);
+    if(localR<5 && !force) return Promise.resolve(false);
 
     writing=true;
     return httpGet(url).then(function(remote){
       setDot(true);
-      remote = remote || {};
-      var remoteR = richness(remote);
+      remote=remote||{};
+      var remoteR=richness(remote);
 
-      if(!force && remoteR > localR + 15){
+      if(!force && remoteR > localR+15){
         writing=false;
         applyRemote(remote);
         lastSig=sigOf(remote);
@@ -303,16 +277,14 @@
         return false;
       }
 
-      var payload = clone(localPayload);
-      if(remote.days){
-        payload.days = mergeDays(remote.days, localPayload.days);
-      }
-      if((remote.tasks||[]).length > (payload.tasks||[]).length) payload.tasks = clone(remote.tasks);
-      if((remote.healthItems||[]).length > (payload.healthItems||[]).length) payload.healthItems = clone(remote.healthItems);
-      if((remote.rewards||[]).length > (payload.rewards||[]).length) payload.rewards = clone(remote.rewards);
-      if((remote.posBehaviors||[]).length > (payload.posBehaviors||[]).length) payload.posBehaviors = clone(remote.posBehaviors);
-      if((remote.negBehaviors||[]).length > (payload.negBehaviors||[]).length) payload.negBehaviors = clone(remote.negBehaviors);
-      if(remote.goal && !payload.goal) payload.goal = remote.goal;
+      var payload=clone(localPayload);
+      if(remote.days) payload.days=mergeDays(remote.days, localPayload.days);
+      if((remote.tasks||[]).length>(payload.tasks||[]).length) payload.tasks=clone(remote.tasks);
+      if((remote.healthItems||[]).length>(payload.healthItems||[]).length) payload.healthItems=clone(remote.healthItems);
+      if((remote.rewards||[]).length>(payload.rewards||[]).length) payload.rewards=clone(remote.rewards);
+      if((remote.posBehaviors||[]).length>(payload.posBehaviors||[]).length) payload.posBehaviors=clone(remote.posBehaviors);
+      if((remote.negBehaviors||[]).length>(payload.negBehaviors||[]).length) payload.negBehaviors=clone(remote.negBehaviors);
+      if(remote.goal && !payload.goal) payload.goal=remote.goal;
       try{
         var map={};
         (remote.pendingChanges||[]).concat(payload.pendingChanges||[]).forEach(function(p){
@@ -321,21 +293,15 @@
         payload.pendingChanges=Object.keys(map).map(function(k){return map[k];});
       }catch(e){}
 
-      payload._updatedAt = Date.now();
-      payload._device = bootId;
-
-      // skip put if nothing changed
+      payload._updatedAt=Date.now();
+      payload._device=bootId;
       var ns=sigOf(payload);
-      if(!force && ns===lastSig){
-        writing=false;
-        return true;
-      }
+      if(!force && ns===lastSig){ writing=false; return true; }
 
       return httpPut(url, payload).then(function(){
         writing=false;
         lastSig=ns;
         lastSummary=summarize(payload);
-        applyRemote(payload);
         setDot(true);
         return true;
       });
@@ -345,23 +311,29 @@
           writing=false; setDot(true); lastSummary=summarize(localPayload); return true;
         }).catch(function(e2){
           writing=false; setDot(false);
-          toast('ارسال ناموفق: '+(e2&&e2.message||e2));
           return false;
         });
       }
-      writing=false;
-      setDot(false);
-      console.log('push fail', err);
+      writing=false; setDot(false);
       return false;
     });
   }
 
+  /** Instant push after any change (tiny debounce only to merge rapid taps) */
   function schedulePush(force){
     try{ if(typeof lsSave==='function') lsSave(); }catch(e){}
     if(S&&S.theme) saveTheme(S.theme);
-    if(!pulledOnce && !force) return;
+    if(!pulledOnce && !force){
+      // still try after short wait for boot pull
+      if(pushTimer) clearTimeout(pushTimer);
+      pushTimer=setTimeout(function(){ push(true); }, 300);
+      return;
+    }
     if(pushTimer) clearTimeout(pushTimer);
-    pushTimer=setTimeout(function(){ push(!!force); }, force?150:400);
+    pushTimer=setTimeout(function(){
+      quietUntil=0;
+      push(true); // force: user just changed something
+    }, force?50:120);
   }
 
   function hardReset(){
@@ -377,18 +349,15 @@
       S.healthItems=[]; S.pendingChanges=[]; S.streak=0;
       S.posBehaviors=[]; S.negBehaviors=[];
     }catch(e){}
-    quietUntil=0;
-    pulledOnce=false;
+    quietUntil=0; pulledOnce=false;
     return httpGet(cloudUrl()).then(function(remote){
       if(!remote||(!remote.tasks&&!remote.days)){
         toast('ابر خالی یا در دسترس نیست');
-        setDot(false);
-        return false;
+        setDot(false); return false;
       }
       applyRemote(remote);
       lastSig=sigOf(remote);
-      pulledOnce=true; hydrated=true;
-      setDot(true);
+      pulledOnce=true; hydrated=true; setDot(true);
       try{
         if(role){
           localStorage.setItem('daftar-device-role-v2',role);
@@ -397,39 +366,27 @@
         if(theme) saveTheme(theme);
       }catch(e){}
       toast('✓ بازنشانی شد — '+summarize(remote));
-      setTimeout(function(){ try{ location.reload(); }catch(e){} }, 500);
+      setTimeout(function(){ try{ location.reload(); }catch(e){} }, 400);
       return true;
     }).catch(function(err){
       setDot(false);
-      toast('بازنشانی ناموفق: '+(err&&err.message||err));
+      toast('بازنشانی ناموفق');
       return false;
     });
   }
 
-  var autoBusy=false;
   function fullSync(showMsg){
-    if(autoBusy && !showMsg) return Promise.resolve(false);
-    autoBusy=true;
-    if(showMsg) toast('همگام‌سازی دوطرفه...');
+    if(busy && !showMsg) return Promise.resolve(false);
+    busy=true;
+    if(showMsg) toast('همگام‌سازی...');
     return pull(!!showMsg).then(function(){
       quietUntil=0;
       return push(true);
     }).then(function(ok){
-      if(showMsg) toast(ok?('✓ همگام شد — '+(lastSummary||'')):'همگام‌سازی انجام شد');
+      if(showMsg) toast(ok?('✓ همگام شد — '+(lastSummary||'')):'انجام شد');
       try{ if(typeof render==='function') render(); }catch(e){}
-      autoBusy=false;
-      return ok;
-    }).catch(function(){ autoBusy=false; return false; });
-  }
-
-  function autoTick(){
-    if(writing || autoBusy) return;
-    if(typeof S==='undefined') return;
-    autoBusy=true;
-    pull(false).then(function(){
-      quietUntil=0;
-      return push(false);
-    }).then(function(){ autoBusy=false; }).catch(function(){ autoBusy=false; });
+      busy=false; return ok;
+    }).catch(function(){ busy=false; return false; });
   }
 
   function setCloudApi(url){
@@ -442,7 +399,8 @@
     hardReset();
   }
 
-  saveProfile=function(){ schedulePush(false); };
+  // EVERY change → instant cloud push
+  saveProfile=function(){ schedulePush(true); };
   startFirebaseSync=function(){};
 
   document.addEventListener('click', function(e){
@@ -451,7 +409,12 @@
     var a=t.getAttribute('data-act');
     if(a==='force-sync'){ e.preventDefault(); e.stopPropagation(); fullSync(true); }
     if(a==='hard-sync'){ e.preventDefault(); e.stopPropagation(); hardReset(); }
-    if(a==='push-cloud'){ e.preventDefault(); e.stopPropagation(); toast('ارسال...'); push(true).then(function(ok){ toast(ok?('✓ ارسال — '+lastSummary):'ارسال نشد'); }); }
+    if(a==='push-cloud'){
+      e.preventDefault(); e.stopPropagation();
+      toast('ارسال...');
+      quietUntil=0;
+      push(true).then(function(ok){ toast(ok?('✓ ارسال — '+lastSummary):'ارسال نشد'); });
+    }
     if(a==='set-cloud'){
       e.preventDefault(); e.stopPropagation();
       var u=prompt('آدرس Cloudflare Worker:', getCloudBase());
@@ -465,7 +428,7 @@
     return '<div style="display:flex;flex-direction:column;gap:8px;align-items:center;margin:8px 0 12px">'+
       '<button type="button" class="btn" data-act="force-sync" style="width:85%;background:linear-gradient(90deg,#6B3FBF,#9B6DFF)">☁️ همگام‌سازی الان</button>'+
       '<button type="button" class="ghost" data-act="hard-sync" style="font-size:12px;font-weight:700">🔄 بازنشانی کامل از ابر</button>'+
-      '<p class="muted" style="font-size:11px;text-align:center;margin:0">همگام‌سازی خودکار هر ۳ ثانیه فعال است</p>'+
+      '<p class="muted" style="font-size:11px;text-align:center;margin:0">سینک لحظه‌ای بعد از هر ثبت · بدون تبادل بیهوده</p>'+
       '</div>';
   }
 
@@ -488,7 +451,7 @@
       html=html.replace(/<section class="card"><div class="card-h"><h2>☁️[\s\S]*?<\/section>/g,'');
       var box='<section class="card"><div class="card-h"><h2>☁️ همگام‌سازی ابر</h2></div>';
       box+='<p class="muted" dir="ltr" style="font-size:11px">'+getCloudBase()+'</p>';
-      box+='<p class="muted" style="font-size:12px;color:var(--pos);font-weight:700">همگام‌سازی خودکار هر ۳ ثانیه</p>';
+      box+='<p class="muted" style="font-size:12px;color:var(--pos);font-weight:700">سینک بلافاصله بعد از هر تغییر</p>';
       if(lastSummary) box+='<p class="muted" style="font-size:12px">'+lastSummary+'</p>';
       box+='<button type="button" class="btn" data-act="force-sync" style="width:100%;margin-bottom:8px">همگام‌سازی الان</button>';
       box+='<button type="button" class="btn" data-act="push-cloud" style="width:100%;margin-bottom:8px">ارسال کامل به ابر</button>';
@@ -516,12 +479,16 @@
       if(typeof S==='undefined'){
         if(tries<40) return setTimeout(wait,100);
       }
-      pull(false).then(function(){ quietUntil = Date.now() + 1500; pulledOnce = true; });
-      setInterval(function(){ autoTick(); }, 3000);
+      // Only pull when app opens — no idle polling
+      pull(false).then(function(){ pulledOnce=true; });
+
+      // When user returns to app → pull once for others' changes
       document.addEventListener('visibilitychange', function(){
-        if(document.visibilityState==='visible') autoTick();
+        if(document.visibilityState==='visible') pull(false);
       });
-      try{ window.addEventListener('online', function(){ setTimeout(autoTick, 300); }); }catch(e){}
+      try{
+        window.addEventListener('online', function(){ setTimeout(function(){ pull(false); }, 200); });
+      }catch(e){}
     })();
   }
 
@@ -536,8 +503,7 @@
     hard:hardReset,
     setCloud:setCloudApi,
     online:function(){return online},
-    summary:function(){return lastSummary},
-    richness:function(){return localRichness()}
+    summary:function(){return lastSummary}
   };
-  console.log('sync-fix v15 auto 3s');
+  console.log('sync-fix v16 instant-on-change');
 })();
