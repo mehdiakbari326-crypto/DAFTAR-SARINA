@@ -1,15 +1,16 @@
-/* Sync v16 — instant on change, quiet when idle
- * - After ANY save/register → push immediately
- * - Pull only on open / return to app / manual button
- * - No 3s polling spam
+/* Sync v17
+ * - Instant PUSH after every local change (saveProfile)
+ * - While app is visible: PULL every 4s so other phones' changes appear
+ * - Background/idle: no traffic
+ * - Cloud already has correct data; receive path was the gap
  */
 (function(){
   var THEME_KEY='daftar-theme-local';
   var CFG_KEY='daftar-cloud-api';
   var DEFAULT_CLOUD='https://sarina-kv.mehdiakbari326.workers.dev';
-  var hydrated=false, pulledOnce=false, writing=false, pushTimer=null;
-  var lastSig='', online=false, lastSummary='', quietUntil=0, bootId=String(Date.now());
-  var busy=false;
+  var pulledOnce=false, writing=false, pushTimer=null, pullTimer=null;
+  var lastSig='', lastRemoteAt=0, online=false, lastSummary='', quietUntil=0;
+  var bootId=String(Date.now()), busy=false;
 
   function toast(msg){
     try{ if(typeof showToast==='function'){ showToast(msg); return; } }catch(e){}
@@ -36,12 +37,10 @@
       var saved=localStorage.getItem(CFG_KEY);
       if(saved) return String(saved).replace(/\/+$/,'');
     }catch(e){}
-    if(typeof window.CLOUD_API==='string'&&window.CLOUD_API){
+    if(typeof window.CLOUD_API==='string'&&window.CLOUD_API)
       return window.CLOUD_API.replace(/\/+$/,'');
-    }
     return DEFAULT_CLOUD;
   }
-
   function cloudUrl(){
     var b=getCloudBase();
     return b ? (b+'/family/sarina') : '';
@@ -53,28 +52,19 @@
     var t=loadTheme();
     if(t&&typeof S!=='undefined'){ S.theme=t; if(typeof applyTheme==='function') applyTheme(); }
   }
-
-  function clone(o){
-    try{ return JSON.parse(JSON.stringify(o)); }catch(e){ return o; }
-  }
+  function clone(o){ try{ return JSON.parse(JSON.stringify(o)); }catch(e){ return o; } }
 
   function richness(r){
     if(!r||typeof r!=='object') return 0;
-    var days=r.days||{}, marks=0, notes=0, weights=0, beh=0;
+    var days=r.days||{}, marks=0, notes=0, weights=0;
     Object.keys(days).forEach(function(k){
       var d=days[k]||{};
       marks += d.tasks ? Object.keys(d.tasks).length : 0;
       notes += (d.notes&&d.notes.length)||0;
       if(d.weight!=null) weights++;
-      beh += d.behaviors ? Object.keys(d.behaviors).length : 0;
     });
-    return (r.tasks&&r.tasks.length||0)*3
-      + Object.keys(days).length*8 + marks*4 + notes*2 + weights*5 + beh*3
-      + (r.healthItems&&r.healthItems.length||0)*2
-      + (r.rewards&&r.rewards.length||0)*2
-      + (r.posBehaviors&&r.posBehaviors.length||0)
-      + (r.negBehaviors&&r.negBehaviors.length||0)
-      + (r.goal?2:0);
+    return (r.tasks&&r.tasks.length||0)*3 + Object.keys(days).length*8 + marks*4 + notes*2 + weights*5
+      + (r.healthItems&&r.healthItems.length||0)*2 + (r.rewards&&r.rewards.length||0)*2 + (r.goal?2:0);
   }
 
   function sharedFrom(Sref){
@@ -101,10 +91,11 @@
 
   function sigOf(r){
     try{
+      // exclude _updatedAt so we detect real data changes
       return JSON.stringify({
         t:r.tasks, d:r.days, h:r.healthItems, rw:r.rewards, c:r.claims,
         g:r.goal, pt:r.parentTasks, pb:r.posBehaviors, nb:r.negBehaviors,
-        st:r.streak, pc:r.pendingChanges, u:r._updatedAt
+        st:r.streak, pc:r.pendingChanges
       });
     }catch(e){ return String(Math.random()); }
   }
@@ -142,12 +133,7 @@
     return 'تسک '+(r.tasks&&r.tasks.length||0)+
       ' | روز '+(r.days?Object.keys(r.days).length:0)+
       ' | سلامتی '+(r.healthItems&&r.healthItems.length||0)+
-      ' | پاداش '+(r.rewards&&r.rewards.length||0)+
-      ' | هدف '+(r.goal!=null?r.goal:'—');
-  }
-
-  function localRichness(){
-    try{ return richness(sharedFrom(S)); }catch(e){ return 0; }
+      ' | پاداش '+(r.rewards&&r.rewards.length||0);
   }
 
   function httpGet(url){
@@ -158,7 +144,6 @@
       return res.json();
     });
   }
-
   function httpPut(url, body){
     return fetch(url, {
       method:'PUT',
@@ -176,164 +161,151 @@
     Object.keys(b||{}).forEach(function(k){ keys[k]=1; });
     Object.keys(keys).forEach(function(k){
       var da=(a&&a[k])||{}, db=(b&&b[k])||{};
-      var score=function(d){
-        return (d.tasks?Object.keys(d.tasks).length:0)*3
-          + ((d.notes&&d.notes.length)||0)
-          + (d.weight!=null?5:0)
-          + (d.behaviors?Object.keys(d.behaviors).length:0)*2;
-      };
-      if(score(db)>score(da)) out[k]=clone(db);
-      else if(score(da)>0) out[k]=clone(da);
-      else out[k]=clone(db);
-      if(da.tasks && db.tasks){
-        out[k].tasks = Object.assign({}, da.tasks, db.tasks);
-        Object.keys(db.tasks).forEach(function(tid){
-          var x=da.tasks[tid], y=db.tasks[tid];
-          if(x&&y){
-            if(y.s==='done'||x.s==='done') out[k].tasks[tid]=Object.assign({},x,y,{s:'done'});
-            else out[k].tasks[tid]=Object.assign({},x,y);
-          }
-        });
-      }
-      if(da.notes || db.notes){
-        var seen={}, notes=[];
-        ((da.notes)||[]).concat((db.notes)||[]).forEach(function(n){
-          var id=n&&n.id; if(id&&seen[id]) return; if(id) seen[id]=1; notes.push(n);
-        });
-        out[k].notes=notes;
-      }
-      if(da.weight==null && db.weight!=null) out[k].weight=db.weight;
-      if(db.weight==null && da.weight!=null) out[k].weight=da.weight;
+      // Always union task maps; prefer done > missed > unset
+      var tasks={};
+      Object.assign(tasks, da.tasks||{}, db.tasks||{});
+      Object.keys(da.tasks||{}).forEach(function(tid){
+        var x=(da.tasks||{})[tid], y=(db.tasks||{})[tid];
+        if(x&&y){
+          if(x.s==='done'||y.s==='done') tasks[tid]=Object.assign({},x,y,{s:'done'});
+          else if(x.s==='missed'||y.s==='missed') tasks[tid]=Object.assign({},x,y,{s:'missed'});
+          else tasks[tid]=Object.assign({},x,y);
+        }else if(x && !y) tasks[tid]=clone(x);
+        else if(y && !x) tasks[tid]=clone(y);
+      });
+      Object.keys(db.tasks||{}).forEach(function(tid){
+        if(!tasks[tid]) tasks[tid]=clone((db.tasks||{})[tid]);
+      });
+      var seen={}, notes=[];
+      ((da.notes)||[]).concat((db.notes)||[]).forEach(function(n){
+        var id=n&&n.id; if(id&&seen[id]) return; if(id) seen[id]=1; notes.push(n);
+      });
+      var weight = db.weight!=null ? db.weight : da.weight;
+      var behaviors = Object.assign({}, da.behaviors||{}, db.behaviors||{});
+      out[k]={tasks:tasks, notes:notes};
+      if(weight!=null) out[k].weight=weight;
+      if(Object.keys(behaviors).length) out[k].behaviors=behaviors;
     });
     return out;
   }
 
   function pull(showMsg){
     var url=cloudUrl();
-    if(!url){
-      if(showMsg) toast('آدرس ابر خالی است');
-      setDot(false);
-      return Promise.resolve(false);
-    }
+    if(!url){ if(showMsg) toast('آدرس ابر خالی'); setDot(false); return Promise.resolve(false); }
     return httpGet(url).then(function(remote){
       setDot(true);
       if(!remote || (!remote.tasks && !remote.days && !remote.healthItems)){
         if(showMsg) toast('ابر خالی است');
-        pulledOnce=true; hydrated=true;
+        pulledOnce=true;
         return false;
       }
-      var localR=localRichness(), remoteR=richness(remote);
-      if(!showMsg && remoteR < localR*0.5 && localR>20){
-        pulledOnce=true; hydrated=true;
-        // local richer — push it
-        quietUntil=0;
+      var remoteAt = remote._updatedAt || 0;
+      var remoteSig = sigOf(remote);
+
+      // If we have local edits newer and richer, push instead of clobber
+      var localR = richness(sharedFrom(S));
+      var remoteR = richness(remote);
+      if(!showMsg && !writing && localR > remoteR + 20 && lastRemoteAt && remoteAt <= lastRemoteAt){
+        pulledOnce=true;
         schedulePush(true);
         return true;
       }
+
+      // Merge days so neither side loses marks
       try{
         if(S && S.days && remote.days){
-          remote=clone(remote);
-          remote.days=mergeDays(S.days, remote.days);
+          remote = clone(remote);
+          remote.days = mergeDays(remote.days, S.days);
         }
       }catch(e){}
-      var prevSig=lastSig, newSig=sigOf(remote);
+
+      var changed = (remoteSig !== lastSig) || (remoteAt > lastRemoteAt);
       applyRemote(remote);
-      lastSig=newSig;
-      quietUntil=Date.now()+400;
-      hydrated=true; pulledOnce=true; window.__sarinaHydrated=true;
-      if(showMsg || (prevSig && prevSig!==newSig)){
+      lastSig = sigOf(remote);
+      lastRemoteAt = Math.max(lastRemoteAt, remoteAt, remote._updatedAt||0);
+      pulledOnce=true; window.__sarinaHydrated=true;
+      quietUntil = Date.now() + 300;
+
+      if(changed || showMsg){
         try{ if(typeof render==='function') render(); }catch(e){}
       }
       if(showMsg) toast('✓ دریافت شد — '+summarize(remote));
       return true;
     }).catch(function(err){
       setDot(false);
-      if(showMsg) toast('خطا: '+(err&&err.message||err));
+      if(showMsg) toast('خطا دریافت: '+(err&&err.message||err));
       return false;
     });
   }
 
   function push(force){
+    if(writing) return Promise.resolve(false);
     if(Date.now()<quietUntil && !force) return Promise.resolve(false);
-    if(!pulledOnce && !force) return Promise.resolve(false);
     var url=cloudUrl();
     if(!url) return Promise.resolve(false);
 
-    var localPayload=sharedFrom(S);
-    var localR=richness(localPayload);
-    if(localR<5 && !force) return Promise.resolve(false);
+    var localPayload = sharedFrom(S);
+    if(richness(localPayload)<3 && !force) return Promise.resolve(false);
 
     writing=true;
     return httpGet(url).then(function(remote){
       setDot(true);
-      remote=remote||{};
-      var remoteR=richness(remote);
+      remote = remote || {};
+      var payload = clone(localPayload);
 
-      if(!force && remoteR > localR+15){
-        writing=false;
-        applyRemote(remote);
-        lastSig=sigOf(remote);
-        try{ if(typeof render==='function') render(); }catch(e){}
-        return false;
-      }
-
-      var payload=clone(localPayload);
-      if(remote.days) payload.days=mergeDays(remote.days, localPayload.days);
-      if((remote.tasks||[]).length>(payload.tasks||[]).length) payload.tasks=clone(remote.tasks);
-      if((remote.healthItems||[]).length>(payload.healthItems||[]).length) payload.healthItems=clone(remote.healthItems);
-      if((remote.rewards||[]).length>(payload.rewards||[]).length) payload.rewards=clone(remote.rewards);
-      if((remote.posBehaviors||[]).length>(payload.posBehaviors||[]).length) payload.posBehaviors=clone(remote.posBehaviors);
-      if((remote.negBehaviors||[]).length>(payload.negBehaviors||[]).length) payload.negBehaviors=clone(remote.negBehaviors);
-      if(remote.goal && !payload.goal) payload.goal=remote.goal;
+      // Merge with whatever is on server so we never wipe the other phone's marks
+      if(remote.days) payload.days = mergeDays(remote.days, localPayload.days);
+      if((remote.tasks||[]).length > (payload.tasks||[]).length) payload.tasks = clone(remote.tasks);
+      if((remote.healthItems||[]).length > (payload.healthItems||[]).length) payload.healthItems = clone(remote.healthItems);
+      if((remote.rewards||[]).length > (payload.rewards||[]).length) payload.rewards = clone(remote.rewards);
+      if((remote.posBehaviors||[]).length > (payload.posBehaviors||[]).length) payload.posBehaviors = clone(remote.posBehaviors);
+      if((remote.negBehaviors||[]).length > (payload.negBehaviors||[]).length) payload.negBehaviors = clone(remote.negBehaviors);
+      if(remote.goal!=null && payload.goal==null) payload.goal = remote.goal;
       try{
         var map={};
         (remote.pendingChanges||[]).concat(payload.pendingChanges||[]).forEach(function(p){
           if(p&&p.id) map[p.id]=p;
         });
-        payload.pendingChanges=Object.keys(map).map(function(k){return map[k];});
+        payload.pendingChanges = Object.keys(map).map(function(k){return map[k];});
       }catch(e){}
 
-      payload._updatedAt=Date.now();
-      payload._device=bootId;
-      var ns=sigOf(payload);
-      if(!force && ns===lastSig){ writing=false; return true; }
+      payload._updatedAt = Date.now();
+      payload._device = bootId;
 
+      var ns = sigOf(payload);
+      // still put when force even if same (updates _updatedAt)
       return httpPut(url, payload).then(function(){
         writing=false;
-        lastSig=ns;
-        lastSummary=summarize(payload);
+        lastSig = ns;
+        lastRemoteAt = payload._updatedAt;
+        lastSummary = summarize(payload);
         setDot(true);
         return true;
       });
-    }).catch(function(err){
-      if(force){
-        return httpPut(url, localPayload).then(function(){
-          writing=false; setDot(true); lastSummary=summarize(localPayload); return true;
-        }).catch(function(e2){
-          writing=false; setDot(false);
-          return false;
-        });
-      }
-      writing=false; setDot(false);
-      return false;
+    }).catch(function(){
+      // fallback direct put
+      return httpPut(url, localPayload).then(function(){
+        writing=false; setDot(true);
+        lastSig=sigOf(localPayload);
+        lastRemoteAt=localPayload._updatedAt;
+        lastSummary=summarize(localPayload);
+        return true;
+      }).catch(function(e2){
+        writing=false; setDot(false);
+        if(force) toast('ارسال نشد');
+        return false;
+      });
     });
   }
 
-  /** Instant push after any change (tiny debounce only to merge rapid taps) */
   function schedulePush(force){
     try{ if(typeof lsSave==='function') lsSave(); }catch(e){}
     if(S&&S.theme) saveTheme(S.theme);
-    if(!pulledOnce && !force){
-      // still try after short wait for boot pull
-      if(pushTimer) clearTimeout(pushTimer);
-      pushTimer=setTimeout(function(){ push(true); }, 300);
-      return;
-    }
     if(pushTimer) clearTimeout(pushTimer);
     pushTimer=setTimeout(function(){
       quietUntil=0;
-      push(true); // force: user just changed something
-    }, force?50:120);
+      push(true);
+    }, 80); // near-instant after each change
   }
 
   function hardReset(){
@@ -347,17 +319,9 @@
     try{
       S.tasks=[]; S.days={}; S.rewards=[]; S.claims=[];
       S.healthItems=[]; S.pendingChanges=[]; S.streak=0;
-      S.posBehaviors=[]; S.negBehaviors=[];
     }catch(e){}
-    quietUntil=0; pulledOnce=false;
-    return httpGet(cloudUrl()).then(function(remote){
-      if(!remote||(!remote.tasks&&!remote.days)){
-        toast('ابر خالی یا در دسترس نیست');
-        setDot(false); return false;
-      }
-      applyRemote(remote);
-      lastSig=sigOf(remote);
-      pulledOnce=true; hydrated=true; setDot(true);
+    quietUntil=0; pulledOnce=false; lastSig=''; lastRemoteAt=0;
+    return pull(true).then(function(ok){
       try{
         if(role){
           localStorage.setItem('daftar-device-role-v2',role);
@@ -365,18 +329,13 @@
         }
         if(theme) saveTheme(theme);
       }catch(e){}
-      toast('✓ بازنشانی شد — '+summarize(remote));
-      setTimeout(function(){ try{ location.reload(); }catch(e){} }, 400);
-      return true;
-    }).catch(function(err){
-      setDot(false);
-      toast('بازنشانی ناموفق');
-      return false;
+      if(ok) setTimeout(function(){ try{ location.reload(); }catch(e){} }, 400);
+      return ok;
     });
   }
 
   function fullSync(showMsg){
-    if(busy && !showMsg) return Promise.resolve(false);
+    if(busy) return Promise.resolve(false);
     busy=true;
     if(showMsg) toast('همگام‌سازی...');
     return pull(!!showMsg).then(function(){
@@ -389,19 +348,32 @@
     }).catch(function(){ busy=false; return false; });
   }
 
+  // Foreground-only receive loop (other phone's changes)
+  function startForegroundPull(){
+    stopForegroundPull();
+    pullTimer = setInterval(function(){
+      if(document.visibilityState!=='visible') return;
+      if(writing || busy) return;
+      pull(false);
+    }, 4000);
+  }
+  function stopForegroundPull(){
+    if(pullTimer){ clearInterval(pullTimer); pullTimer=null; }
+  }
+
   function setCloudApi(url){
     url=(url||'').trim().replace(/\/+$/,'');
     if(!url){ toast('آدرس خالی'); return; }
-    if(url.indexOf('https://')!==0){ toast('باید با https:// شروع شود'); return; }
+    if(url.indexOf('https://')!==0){ toast('باید https:// باشد'); return; }
     try{ localStorage.setItem(CFG_KEY, url); }catch(e){}
     window.CLOUD_API=url;
     toast('آدرس ذخیره شد');
     hardReset();
   }
 
-  // EVERY change → instant cloud push
-  saveProfile=function(){ schedulePush(true); };
-  startFirebaseSync=function(){};
+  // Critical: every mutDay/save hits this → instant cloud push
+  saveProfile = function(){ schedulePush(true); };
+  startFirebaseSync = function(){};
 
   document.addEventListener('click', function(e){
     var t=e.target.closest('[data-act]');
@@ -411,13 +383,12 @@
     if(a==='hard-sync'){ e.preventDefault(); e.stopPropagation(); hardReset(); }
     if(a==='push-cloud'){
       e.preventDefault(); e.stopPropagation();
-      toast('ارسال...');
-      quietUntil=0;
-      push(true).then(function(ok){ toast(ok?('✓ ارسال — '+lastSummary):'ارسال نشد'); });
+      toast('ارسال...'); quietUntil=0;
+      push(true).then(function(ok){ toast(ok?('✓ '+lastSummary):'ارسال نشد'); });
     }
     if(a==='set-cloud'){
       e.preventDefault(); e.stopPropagation();
-      var u=prompt('آدرس Cloudflare Worker:', getCloudBase());
+      var u=prompt('آدرس Cloudflare:', getCloudBase());
       if(u===null) return;
       setCloudApi(u);
     }
@@ -428,7 +399,7 @@
     return '<div style="display:flex;flex-direction:column;gap:8px;align-items:center;margin:8px 0 12px">'+
       '<button type="button" class="btn" data-act="force-sync" style="width:85%;background:linear-gradient(90deg,#6B3FBF,#9B6DFF)">☁️ همگام‌سازی الان</button>'+
       '<button type="button" class="ghost" data-act="hard-sync" style="font-size:12px;font-weight:700">🔄 بازنشانی کامل از ابر</button>'+
-      '<p class="muted" style="font-size:11px;text-align:center;margin:0">سینک لحظه‌ای بعد از هر ثبت · بدون تبادل بیهوده</p>'+
+      '<p class="muted" style="font-size:11px;text-align:center;margin:0">ارسال لحظه‌ای بعد از ثبت · دریافت وقتی اپ باز است</p>'+
       '</div>';
   }
 
@@ -451,7 +422,8 @@
       html=html.replace(/<section class="card"><div class="card-h"><h2>☁️[\s\S]*?<\/section>/g,'');
       var box='<section class="card"><div class="card-h"><h2>☁️ همگام‌سازی ابر</h2></div>';
       box+='<p class="muted" dir="ltr" style="font-size:11px">'+getCloudBase()+'</p>';
-      box+='<p class="muted" style="font-size:12px;color:var(--pos);font-weight:700">سینک بلافاصله بعد از هر تغییر</p>';
+      box+='<p class="muted" style="font-size:12px;color:var(--pos);font-weight:700">ارسال بلافاصله بعد از هر ثبت</p>';
+      box+='<p class="muted" style="font-size:12px">دریافت خودکار فقط وقتی اپ روی صفحه است</p>';
       if(lastSummary) box+='<p class="muted" style="font-size:12px">'+lastSummary+'</p>';
       box+='<button type="button" class="btn" data-act="force-sync" style="width:100%;margin-bottom:8px">همگام‌سازی الان</button>';
       box+='<button type="button" class="btn" data-act="push-cloud" style="width:100%;margin-bottom:8px">ارسال کامل به ابر</button>';
@@ -477,14 +449,17 @@
     (function wait(){
       tries++;
       if(typeof S==='undefined'){
-        if(tries<40) return setTimeout(wait,100);
+        if(tries<50) return setTimeout(wait,100);
       }
-      // Only pull when app opens — no idle polling
       pull(false).then(function(){ pulledOnce=true; });
-
-      // When user returns to app → pull once for others' changes
+      startForegroundPull();
       document.addEventListener('visibilitychange', function(){
-        if(document.visibilityState==='visible') pull(false);
+        if(document.visibilityState==='visible'){
+          pull(false);
+          startForegroundPull();
+        }else{
+          stopForegroundPull();
+        }
       });
       try{
         window.addEventListener('online', function(){ setTimeout(function(){ pull(false); }, 200); });
@@ -505,5 +480,5 @@
     online:function(){return online},
     summary:function(){return lastSummary}
   };
-  console.log('sync-fix v16 instant-on-change');
+  console.log('sync-fix v17 instant-push + foreground-pull');
 })();
