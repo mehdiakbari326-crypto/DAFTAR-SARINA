@@ -1,0 +1,8 @@
+name = "sarina-daftar"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# After creating KV namespace in dashboard, put the id here:
+# [[kv_namespaces]]
+# binding = "SARINA_KV"
+# id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"

@@ -41,7 +41,7 @@ jobs:
           set -e
           mkdir -p www
           cp index.html www/index.html
-          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js ui-polish.js behavior-tasks.js; do
+          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js ui-polish.js behavior-tasks.js cloud-config.js; do
             if [ -f "$f" ]; then cp "$f" "www/$f"; echo "copied $f"; fi
           done
           BLOB_SHA="25a039f0a5ae4cee254e40e37f7a4445ab664e47"

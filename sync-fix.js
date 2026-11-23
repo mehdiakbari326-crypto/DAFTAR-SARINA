@@ -1,25 +1,16 @@
-/* Sync v11: REST-FIRST (never hang on blocked WebSocket)
- * Cloud is source of truth. Simple, reliable, visible status.
- */
+/* Sync v12: Cloudflare Worker primary (no VPN), Firebase one-time migrate */
 (function(){
-  var PATH='family/sarina';
-  var REST='https://sarina-daftar-default-rtdb.firebaseio.com/family/sarina.json';
+  var FB_REST='https://sarina-daftar-default-rtdb.firebaseio.com/family/sarina.json';
   var THEME_KEY='daftar-theme-local';
-  var hydrated=false;
-  var pulledOnce=false;
-  var writing=false;
-  var pushTimer=null;
-  var lastSig='';
-  var online=false;
+  var CFG_KEY='daftar-cloud-api';
+  var hydrated=false, pulledOnce=false, writing=false, pushTimer=null, lastSig='', online=false;
 
   function toast(msg){
     try{ if(typeof showToast==='function'){ showToast(msg); return; } }catch(e){}
     try{
-      var el=document.createElement('div');
-      el.className='toast';
-      el.textContent=msg;
+      var el=document.createElement('div'); el.className='toast'; el.textContent=msg;
       document.body.appendChild(el);
-      setTimeout(function(){ try{el.remove()}catch(e){} }, 3500);
+      setTimeout(function(){try{el.remove()}catch(e){}},3500);
     }catch(e){}
   }
 
@@ -29,20 +20,32 @@
       if(typeof syncStatus!=='undefined') syncStatus=on?'online':'offline';
       if(typeof updateSyncDot==='function') updateSyncDot();
       document.querySelectorAll('.sync-dot').forEach(function(d){
-        d.classList.toggle('on', !!on);
-        d.classList.toggle('off', !on);
+        d.classList.toggle('on',!!on); d.classList.toggle('off',!on);
       });
     }catch(e){}
+  }
+
+  function getCloudBase(){
+    try{
+      var saved=localStorage.getItem(CFG_KEY);
+      if(saved) return saved.replace(/\/+$/,'');
+    }catch(e){}
+    if(typeof window.CLOUD_API==='string'&&window.CLOUD_API){
+      return window.CLOUD_API.replace(/\/+$/,'');
+    }
+    return '';
+  }
+
+  function cloudUrl(){
+    var b=getCloudBase();
+    return b ? (b+'/family/sarina') : '';
   }
 
   function loadTheme(){ try{return localStorage.getItem(THEME_KEY)}catch(e){return null} }
   function saveTheme(t){ try{if(t)localStorage.setItem(THEME_KEY,t)}catch(e){} }
   function applyThemeLocal(){
     var t=loadTheme();
-    if(t&&typeof S!=='undefined'){
-      S.theme=t;
-      if(typeof applyTheme==='function') applyTheme();
-    }
+    if(t&&typeof S!=='undefined'){ S.theme=t; if(typeof applyTheme==='function') applyTheme(); }
   }
 
   function sharedFrom(Sref){
@@ -71,14 +74,12 @@
         t:r.tasks,d:r.days,h:r.healthItems,rw:r.rewards,g:r.goal,
         pb:r.posBehaviors,nb:r.negBehaviors,st:r.streak,pc:r.pendingChanges,u:r._updatedAt
       });
-    }catch(e){ return String(Math.random()); }
+    }catch(e){return String(Math.random())}
   }
 
   function applyRemote(r){
     if(!r||typeof r!=='object') return false;
-    // ignore pure ping-only payloads
-    if(!r.tasks && !r.days && !r.healthItems && r._ping) return false;
-
+    if(!r.tasks&&!r.days&&!r.healthItems&&r._ping) return false;
     if(r.name!=null) S.name=r.name;
     if(r.tasks) S.tasks=Array.isArray(r.tasks)?r.tasks.slice():S.tasks;
     if(r.days) S.days=JSON.parse(JSON.stringify(r.days));
@@ -116,23 +117,31 @@
     }catch(e){ return true; }
   }
 
-  // ---- REST only for reliability ----
-  function restGet(){
-    return fetch(REST+'?t='+Date.now(), {
-      method:'GET',
-      headers:{'Accept':'application/json'},
-      cache:'no-store'
+  function httpGet(url){
+    return fetch(url+(url.indexOf('?')>=0?'&':'?')+'t='+Date.now(), {
+      method:'GET', headers:{'Accept':'application/json'}, cache:'no-store'
     }).then(function(res){
       if(!res.ok) throw new Error('HTTP '+res.status);
       return res.json();
     });
   }
 
-  function restPatch(payload){
-    return fetch(REST, {
+  function httpPatch(url, body){
+    return fetch(url, {
       method:'PATCH',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(payload)
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify(body)
+    }).then(function(res){
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      return res.json();
+    });
+  }
+
+  function httpPut(url, body){
+    return fetch(url, {
+      method:'PUT',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify(body)
     }).then(function(res){
       if(!res.ok) throw new Error('HTTP '+res.status);
       return res.json();
@@ -140,40 +149,75 @@
   }
 
   function pull(showMsg){
-    return restGet().then(function(r){
+    var url=cloudUrl();
+    if(!url){
+      // No cloud configured — try Firebase once for migrate hint
+      if(showMsg) toast('آدرس ابر تنظیم نشده — از تنظیمات وارد کنید');
+      setDot(false);
+      return Promise.resolve(false);
+    }
+    return httpGet(url).then(function(r){
       setDot(true);
       if(!r || (typeof r==='object' && !r.tasks && !r.healthItems && !r.days)){
-        if(showMsg) toast('ابر خالی است');
-        hydrated=true; pulledOnce=true;
-        return false;
+        // empty cloud — try migrate from Firebase once
+        return migrateFromFirebase(showMsg);
       }
       var before=isEmptyLocal();
       applyRemote(r);
       lastSig=sigOf(r);
-      hydrated=true; pulledOnce=true;
-      window.__sarinaHydrated=true;
+      hydrated=true; pulledOnce=true; window.__sarinaHydrated=true;
       try{ if(typeof render==='function') render(); }catch(e){}
       if(showMsg) toast('✓ همگام شد — '+summarize(r));
-      // if device was empty, hard reload so every module sees new S
       if(before && !isEmptyLocal()){
         setTimeout(function(){ try{ location.reload(); }catch(e){} }, 400);
       }
       return true;
     }).catch(function(err){
-      console.log('REST pull fail', err);
+      console.log('cloud pull fail', err);
       setDot(false);
-      if(showMsg) toast('اتصال به ابر برقرار نشد. اینترنت/VPN را چک کنید');
+      if(showMsg) toast('اتصال به ابر برقرار نشد');
+      return false;
+    });
+  }
+
+  function migrateFromFirebase(showMsg){
+    return httpGet(FB_REST).then(function(r){
+      if(!r||(!r.tasks&&!r.healthItems)){
+        if(showMsg) toast('ابر خالی است');
+        hydrated=true; pulledOnce=true;
+        return false;
+      }
+      // push firebase data to cloudflare
+      var url=cloudUrl();
+      var payload=Object.assign({}, r);
+      delete payload._ping;
+      payload._updatedAt=Date.now();
+      return httpPut(url, payload).then(function(){
+        applyRemote(payload);
+        lastSig=sigOf(payload);
+        hydrated=true; pulledOnce=true;
+        setDot(true);
+        try{ if(typeof render==='function') render(); }catch(e){}
+        if(showMsg) toast('✓ داده از Firebase منتقل شد — '+summarize(payload));
+        setTimeout(function(){ try{ location.reload(); }catch(e){} }, 500);
+        return true;
+      });
+    }).catch(function(){
+      if(showMsg) toast('مهاجرت انجام نشد (Firebase در دسترس نیست — VPN موقت روشن کنید فقط یک‌بار)');
+      hydrated=true; pulledOnce=true;
       return false;
     });
   }
 
   function push(force){
-    if(!pulledOnce && !force) return;
-    if(isEmptyLocal() && !force) return;
+    if(!pulledOnce&&!force) return;
+    if(isEmptyLocal()&&!force) return;
+    var url=cloudUrl();
+    if(!url) return;
     var payload=sharedFrom(S);
     writing=true;
     if(typeof ignoreRemote!=='undefined') ignoreRemote=true;
-    restPatch(payload).then(function(){
+    httpPatch(url, payload).then(function(){
       writing=false;
       lastSig=sigOf(payload);
       setDot(true);
@@ -183,14 +227,14 @@
       writing=false;
       if(typeof ignoreRemote!=='undefined') ignoreRemote=false;
       setDot(false);
-      console.log('REST push fail', err);
+      console.log('cloud push fail', err);
     });
   }
 
   function schedulePush(){
     try{ if(typeof lsSave==='function') lsSave(); }catch(e){}
     if(S&&S.theme) saveTheme(S.theme);
-    if(!pulledOnce || isEmptyLocal()) return;
+    if(!pulledOnce||isEmptyLocal()) return;
     if(pushTimer) clearTimeout(pushTimer);
     pushTimer=setTimeout(function(){ push(false); }, 600);
   }
@@ -206,8 +250,8 @@
     return pull(true).then(function(ok){
       try{
         if(role){
-          localStorage.setItem('daftar-device-role-v2', role);
-          localStorage.setItem('daftar-device-role-backup', role);
+          localStorage.setItem('daftar-device-role-v2',role);
+          localStorage.setItem('daftar-device-role-backup',role);
         }
         if(theme) saveTheme(theme);
       }catch(e){}
@@ -216,65 +260,62 @@
     });
   }
 
-  // Override globals — kill old SDK sync
+  function setCloudApi(url){
+    url=(url||'').trim().replace(/\/+$/,'');
+    if(!url){ toast('آدرس خالی است'); return; }
+    if(url.indexOf('https://')!==0){ toast('آدرس باید با https:// شروع شود'); return; }
+    try{ localStorage.setItem(CFG_KEY, url); }catch(e){}
+    window.CLOUD_API=url;
+    toast('آدرس ابر ذخیره شد — در حال اتصال...');
+    pull(true);
+  }
+
   saveProfile=function(){ schedulePush(); };
   startFirebaseSync=function(){};
-
-  // Optional: SDK live listener only if it connects quickly
-  function trySdkListener(){
-    try{
-      if(typeof firebase==='undefined'||!firebase.database) return;
-      var dbref=firebase.database().ref(PATH);
-      var done=false;
-      var timer=setTimeout(function(){ done=true; }, 3000);
-      firebase.database().ref('.info/connected').once('value').then(function(snap){
-        if(done) return;
-        clearTimeout(timer);
-        if(!snap.val()) return; // not connected — stay on REST
-        dbref.on('value', function(s){
-          if(writing) return;
-          if(typeof ignoreRemote!=='undefined'&&ignoreRemote) return;
-          var r=s.val();
-          if(!r) return;
-          var sig=sigOf(r);
-          if(sig===lastSig) return;
-          lastSig=sig;
-          applyRemote(r);
-          setDot(true);
-          try{ if(typeof render==='function') render(); }catch(e){}
-        });
-      }).catch(function(){});
-    }catch(e){}
-  }
 
   document.addEventListener('click', function(e){
     var t=e.target.closest('[data-act]');
     if(!t) return;
     var a=t.getAttribute('data-act');
-    if(a==='force-sync'){ e.preventDefault(); e.stopPropagation(); toast('در حال همگام‌سازی...'); pull(true); }
+    if(a==='force-sync'){ e.preventDefault(); e.stopPropagation(); toast('همگام‌سازی...'); pull(true); }
     if(a==='hard-sync'){ e.preventDefault(); e.stopPropagation(); hardReset(); }
+    if(a==='set-cloud'){
+      e.preventDefault(); e.stopPropagation();
+      var cur=getCloudBase()||'https://sarina-daftar.YOUR_SUBDOMAIN.workers.dev';
+      var u=prompt('آدرس Cloudflare Worker را وارد کنید (بدون / انتها):', cur);
+      if(u===null) return;
+      setCloudApi(u);
+    }
+    if(a==='migrate-fb'){
+      e.preventDefault(); e.stopPropagation();
+      if(!cloudUrl()){ toast('اول آدرس ابر را تنظیم کنید'); return; }
+      toast('مهاجرت از Firebase...');
+      migrateFromFirebase(true);
+    }
     if(a==='theme'){ setTimeout(function(){ if(S&&S.theme) saveTheme(S.theme); }, 30); }
   }, true);
 
   function syncBar(){
-    return '<div style="display:flex;flex-direction:column;gap:8px;align-items:center;margin:8px 0 12px">'+
-      '<button type="button" class="btn" data-act="force-sync" style="width:85%;background:linear-gradient(90deg,#6B3FBF,#9B6DFF)">☁️ همگام‌سازی با ابر</button>'+
-      '<button type="button" class="ghost" data-act="hard-sync" style="font-size:12px;font-weight:700">🔄 بازنشانی کامل از ابر</button>'+
-      '</div>';
+    var configured=!!getCloudBase();
+    var h='<div style="display:flex;flex-direction:column;gap:8px;align-items:center;margin:8px 0 12px">';
+    if(!configured){
+      h+='<button type="button" class="btn" data-act="set-cloud" style="width:85%;background:linear-gradient(90deg,#F59E0B,#EF4444)">⚙️ تنظیم آدرس ابر (Cloudflare)</button>';
+    }else{
+      h+='<button type="button" class="btn" data-act="force-sync" style="width:85%;background:linear-gradient(90deg,#6B3FBF,#9B6DFF)">☁️ همگام‌سازی با ابر</button>';
+      h+='<button type="button" class="ghost" data-act="hard-sync" style="font-size:12px;font-weight:700">🔄 بازنشانی کامل از ابر</button>';
+    }
+    h+='</div>';
+    return h;
   }
 
-  // Show sync buttons on Today for everyone (until stable)
   var _todayView=typeof todayView==='function'?todayView:null;
   if(_todayView){
     todayView=function(){
       var html=_todayView();
-      if(html.indexOf('data-act="force-sync"')>=0) return html;
-      // inject after level / first card
+      if(html.indexOf('data-act="force-sync"')>=0||html.indexOf('data-act="set-cloud"')>=0) return html;
       if(html.indexOf('class="level-card"')>=0){
         html=html.replace(/(<section class="level-card"[\s\S]*?<\/section>)/, function(m){ return m+syncBar(); });
-      }else{
-        html=syncBar()+html;
-      }
+      }else html=syncBar()+html;
       return html;
     };
   }
@@ -284,37 +325,47 @@
     settingsView=function(){
       var html=_settingsView();
       html=html.replace(/<section class="card"><div class="card-h"><h2>☁️ همگام‌سازی[\s\S]*?<\/section>/g,'');
-      html+= '<section class="card"><div class="card-h"><h2>☁️ همگام‌سازی</h2></div>'+
-        '<p class="muted">اگر داده ناقص است بازنشانی کامل را بزنید</p>'+
-        '<button type="button" class="btn" data-act="force-sync" style="width:100%;margin-bottom:8px">دریافت از ابر</button>'+
-        '<button type="button" class="ghost" data-act="hard-sync" style="width:100%">🔄 بازنشانی کامل از ابر</button></section>';
-      return html;
+      var base=getCloudBase();
+      var box='<section class="card"><div class="card-h"><h2>☁️ ابر (Cloudflare)</h2></div>';
+      box+='<p class="muted">آدرس فعلی: <b dir="ltr" style="font-size:11px">'+(base||'تنظیم نشده')+'</b></p>';
+      box+='<button type="button" class="btn" data-act="set-cloud" style="width:100%;margin-bottom:8px">تنظیم / تغییر آدرس ابر</button>';
+      box+='<button type="button" class="btn" data-act="force-sync" style="width:100%;margin-bottom:8px">همگام‌سازی</button>';
+      box+='<button type="button" class="ghost" data-act="hard-sync" style="width:100%;margin-bottom:8px">بازنشانی کامل از ابر</button>';
+      box+='<button type="button" class="ghost" data-act="migrate-fb" style="width:100%">انتقال یک‌باره از Firebase (نیاز به VPN)</button>';
+      box+='</section>';
+      return html+box;
     };
   }
 
   function boot(){
     applyThemeLocal();
-    // Always REST pull first — don't wait for SDK
-    pull(false).then(function(ok){
-      if(!ok && !isEmptyLocal()){
-        // local has data, cloud unreachable — keep local, try push later
-        pulledOnce=true;
-      }
-      trySdkListener();
-    });
-    // periodic REST pull every 5s
-    setInterval(function(){ if(!writing) pull(false); }, 5000);
+    // load cloud-config.js value if present
+    if(typeof window.CLOUD_API==='string'&&window.CLOUD_API){
+      try{ if(!localStorage.getItem(CFG_KEY)) localStorage.setItem(CFG_KEY, window.CLOUD_API.replace(/\/+$/,'')); }catch(e){}
+    }
+    if(getCloudBase()){
+      pull(false);
+    }else{
+      setDot(false);
+      console.log('cloud API not configured');
+    }
+    setInterval(function(){ if(!writing && getCloudBase()) pull(false); }, 5000);
     document.addEventListener('visibilitychange', function(){
-      if(document.visibilityState==='visible') pull(false);
+      if(document.visibilityState==='visible' && getCloudBase()) pull(false);
     });
   }
 
   if(document.readyState==='loading'){
     document.addEventListener('DOMContentLoaded', function(){ setTimeout(boot, 300); });
-  }else{
-    setTimeout(boot, 300);
-  }
+  }else setTimeout(boot, 300);
 
-  window.__sarinaSync={ pull:function(){return pull(true)}, hard:hardReset, push:function(){push(true)}, online:function(){return online} };
-  console.log('sync-fix v11 REST-first');
+  window.__sarinaSync={
+    pull:function(){return pull(true)},
+    hard:hardReset,
+    push:function(){push(true)},
+    setCloud:setCloudApi,
+    migrate:function(){return migrateFromFirebase(true)},
+    online:function(){return online}
+  };
+  console.log('sync-fix v12 Cloudflare');
 })();
