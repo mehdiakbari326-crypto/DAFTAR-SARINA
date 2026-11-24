@@ -1,12 +1,10 @@
-/* Sync v18 — anti-stale
- * Root cause found in dual-phone simulation:
- *   Phone B pushed OLD local state and overwrote Phone A's marks on cloud.
- * Fixes:
- *  1) Never push without GET+merge first
- *  2) Skip push if local data is older/thinner than remote
- *  3) Instant push only after real user edits (dirty flag)
- *  4) Foreground pull every 4s to receive others' changes
- *  5) Server worker v2 also merges (deploy cloudflare/worker.js)
+/* Sync v19 — fix green-then-revert
+ * Bug: user marks task green → few seconds later pull applies old cloud → reverts.
+ * Fix:
+ *  1) While dirty/writing: do NOT pull-over local state
+ *  2) After local edit: grace period keeps local day marks on top of any pull
+ *  3) Push is automatic right after every saveProfile
+ *  4) Pull only when idle (no pending local edit)
  */
 (function(){
   var THEME_KEY='daftar-theme-local';
@@ -15,13 +13,14 @@
   var pulledOnce=false, writing=false, pushTimer=null, pullTimer=null;
   var lastSig='', lastRemoteAt=0, online=false, lastSummary='';
   var bootId=String(Date.now()), busy=false, dirty=false;
+  var localEditUntil=0; // grace: protect local marks from pull
 
   function toast(msg){
     try{ if(typeof showToast==='function'){ showToast(msg); return; } }catch(e){}
     try{
       var el=document.createElement('div'); el.className='toast'; el.textContent=msg;
       document.body.appendChild(el);
-      setTimeout(function(){try{el.remove()}catch(e){}},3500);
+      setTimeout(function(){try{el.remove()}catch(e){}},3000);
     }catch(e){}
   }
 
@@ -57,19 +56,6 @@
     if(t&&typeof S!=='undefined'){ S.theme=t; if(typeof applyTheme==='function') applyTheme(); }
   }
   function clone(o){ try{ return JSON.parse(JSON.stringify(o)); }catch(e){ return o; } }
-
-  function richness(r){
-    if(!r||typeof r!=='object') return 0;
-    var days=r.days||{}, marks=0, notes=0, weights=0;
-    Object.keys(days).forEach(function(k){
-      var d=days[k]||{};
-      marks += d.tasks ? Object.keys(d.tasks).length : 0;
-      notes += (d.notes&&d.notes.length)||0;
-      if(d.weight!=null) weights++;
-    });
-    return (r.tasks&&r.tasks.length||0)*3 + Object.keys(days).length*8 + marks*4 + notes*2 + weights*5
-      + (r.healthItems&&r.healthItems.length||0)*2 + (r.rewards&&r.rewards.length||0)*2 + (r.goal?2:0);
-  }
 
   function sharedFrom(Sref){
     return {
@@ -136,8 +122,7 @@
     return 'تسک '+(r.tasks&&r.tasks.length||0)+
       ' | روز '+(r.days?Object.keys(r.days).length:0)+
       ' | سلامتی '+(r.healthItems&&r.healthItems.length||0)+
-      ' | پاداش '+(r.rewards&&r.rewards.length||0)+
-      ' | هدف '+(r.goal!=null?r.goal:'—');
+      ' | پاداش '+(r.rewards&&r.rewards.length||0);
   }
 
   function httpGet(url){
@@ -159,8 +144,8 @@
     });
   }
 
+  /** b (local) wins on same task id */
   function mergeDays(a, b){
-    // b (local edits) wins on same task id
     var out={}, keys={};
     Object.keys(a||{}).forEach(function(k){ keys[k]=1; });
     Object.keys(b||{}).forEach(function(k){ keys[k]=1; });
@@ -180,9 +165,18 @@
     return out;
   }
 
+  function inGrace(){ return Date.now() < localEditUntil; }
+
   function pull(showMsg){
     var url=cloudUrl();
     if(!url){ if(showMsg) toast('آدرس ابر خالی'); setDot(false); return Promise.resolve(false); }
+
+    // CRITICAL: never overwrite in-flight local edits
+    if(!showMsg && (dirty || writing || inGrace())){
+      if(dirty && !writing) schedulePush(true);
+      return Promise.resolve(false);
+    }
+
     return httpGet(url).then(function(remote){
       setDot(true);
       if(!remote || (!remote.tasks && !remote.days && !remote.healthItems)){
@@ -191,28 +185,26 @@
         return false;
       }
 
-      var remoteAt = remote._updatedAt || 0;
-      var remoteSig = sigOf(remote);
-      var localR = richness(sharedFrom(S));
-      var remoteR = richness(remote);
-
-      // If we have unsynced dirty local edits, merge them on top of remote instead of discarding
-      if(dirty){
+      // Manual pull during grace: still keep local day marks on top
+      if(dirty || inGrace()){
         try{
           remote = clone(remote);
-          remote.days = mergeDays(remote.days||{}, S.days||{});
-          if((S.tasks||[]).length >= (remote.tasks||[]).length) remote.tasks = clone(S.tasks);
-          if(S.goal!=null) remote.goal = S.goal;
-          if((S.rewards||[]).length >= (remote.rewards||[]).length) remote.rewards = clone(S.rewards);
-          if((S.healthItems||[]).length >= (remote.healthItems||[]).length) remote.healthItems = clone(S.healthItems);
-          if((S.posBehaviors||[]).length >= (remote.posBehaviors||[]).length) remote.posBehaviors = clone(S.posBehaviors);
-          if((S.negBehaviors||[]).length >= (remote.negBehaviors||[]).length) remote.negBehaviors = clone(S.negBehaviors);
+          remote.days = mergeDays(remote.days||{}, (S&&S.days)||{});
+          if(S){
+            if((S.tasks||[]).length >= (remote.tasks||[]).length) remote.tasks = clone(S.tasks);
+            if(S.goal!=null) remote.goal = S.goal;
+            if((S.rewards||[]).length >= (remote.rewards||[]).length) remote.rewards = clone(S.rewards);
+            if((S.healthItems||[]).length >= (remote.healthItems||[]).length) remote.healthItems = clone(S.healthItems);
+          }
         }catch(e){}
       }
 
+      var remoteAt = remote._updatedAt || 0;
+      var remoteSig = sigOf(remote);
       var changed = (remoteSig !== lastSig) || (remoteAt > lastRemoteAt);
+
       applyRemote(remote);
-      lastSig = sigOf(remote);
+      lastSig = sigOf(S);
       lastRemoteAt = Math.max(lastRemoteAt, remoteAt);
       pulledOnce=true; window.__sarinaHydrated=true;
 
@@ -221,12 +213,9 @@
       }
       if(showMsg) toast('✓ دریافت شد — '+summarize(remote));
 
-      // If dirty, push merged result back
-      if(dirty){
-        schedulePush(true);
-      }
+      if(dirty) schedulePush(true);
       return true;
-    }).catch(function(err){
+    }).catch(function(){
       setDot(false);
       if(showMsg) toast('خطا دریافت');
       return false;
@@ -239,26 +228,31 @@
     var url=cloudUrl();
     if(!url) return Promise.resolve(false);
 
-    var localPayload = sharedFrom(S);
-    if(richness(localPayload)<3 && !force) return Promise.resolve(false);
+    // Snapshot local BEFORE any async gap
+    var localSnapshot = sharedFrom(S);
+    if(!localSnapshot.tasks || localSnapshot.tasks.length<1){
+      return Promise.resolve(false);
+    }
 
     writing=true;
-    // ALWAYS get server first — never blind overwrite
     return httpGet(url).then(function(remote){
       setDot(true);
       remote = remote || {};
-      var remoteAt = remote._updatedAt || 0;
 
-      var payload = clone(localPayload);
-      // Server days + local days; local wins per-task for dirty edits
-      payload.days = mergeDays(remote.days||{}, localPayload.days||{});
+      var payload = clone(localSnapshot);
+      // Local marks win
+      payload.days = mergeDays(remote.days||{}, localSnapshot.days||{});
 
-      // Prefer longer config lists
-      if((remote.tasks||[]).length > (payload.tasks||[]).length) payload.tasks = clone(remote.tasks);
-      if((remote.healthItems||[]).length > (payload.healthItems||[]).length) payload.healthItems = clone(remote.healthItems);
-      if((remote.rewards||[]).length > (payload.rewards||[]).length && !dirty) payload.rewards = clone(remote.rewards);
-      if((remote.posBehaviors||[]).length > (payload.posBehaviors||[]).length) payload.posBehaviors = clone(remote.posBehaviors);
-      if((remote.negBehaviors||[]).length > (payload.negBehaviors||[]).length) payload.negBehaviors = clone(remote.negBehaviors);
+      if((remote.tasks||[]).length > (payload.tasks||[]).length)
+        payload.tasks = clone(remote.tasks);
+      if((remote.healthItems||[]).length > (payload.healthItems||[]).length)
+        payload.healthItems = clone(remote.healthItems);
+      if((remote.rewards||[]).length > (payload.rewards||[]).length && !dirty)
+        payload.rewards = clone(remote.rewards);
+      if((remote.posBehaviors||[]).length > (payload.posBehaviors||[]).length)
+        payload.posBehaviors = clone(remote.posBehaviors);
+      if((remote.negBehaviors||[]).length > (payload.negBehaviors||[]).length)
+        payload.negBehaviors = clone(remote.negBehaviors);
 
       try{
         var map={};
@@ -274,33 +268,49 @@
       return httpPut(url, payload).then(function(saved){
         writing=false;
         dirty=false;
-        // Use server-merged result if returned
+
+        // Keep local marks even if server response is odd
+        var finalDays = payload.days;
+        if(saved && saved.days){
+          finalDays = mergeDays(saved.days, localSnapshot.days||{});
+        }
         if(saved && typeof saved==='object' && (saved.tasks||saved.days)){
+          saved = clone(saved);
+          saved.days = finalDays;
           applyRemote(saved);
           lastSig = sigOf(saved);
           lastRemoteAt = saved._updatedAt || payload._updatedAt;
           lastSummary = summarize(saved);
         }else{
+          applyRemote(payload);
           lastSig = sigOf(payload);
           lastRemoteAt = payload._updatedAt;
           lastSummary = summarize(payload);
         }
+
+        // Extend grace so a slow pull cannot revert
+        localEditUntil = Date.now() + 8000;
         setDot(true);
+        try{ if(typeof render==='function') render(); }catch(e){}
         return true;
       });
     }).catch(function(){
       writing=false;
       setDot(false);
+      // stay dirty so we retry
+      dirty=true;
+      setTimeout(function(){ if(dirty) push(true); }, 2000);
       return false;
     });
   }
 
-  function schedulePush(force){
+  function schedulePush(){
     try{ if(typeof lsSave==='function') lsSave(); }catch(e){}
     if(S&&S.theme) saveTheme(S.theme);
     dirty = true;
+    localEditUntil = Date.now() + 15000; // protect marks for 15s
     if(pushTimer) clearTimeout(pushTimer);
-    pushTimer=setTimeout(function(){ push(true); }, 100);
+    pushTimer=setTimeout(function(){ push(true); }, 80);
   }
 
   function hardReset(){
@@ -315,7 +325,7 @@
       S.tasks=[]; S.days={}; S.rewards=[]; S.claims=[];
       S.healthItems=[]; S.pendingChanges=[]; S.streak=0;
     }catch(e){}
-    dirty=false; pulledOnce=false; lastSig=''; lastRemoteAt=0;
+    dirty=false; localEditUntil=0; pulledOnce=false; lastSig=''; lastRemoteAt=0;
     return pull(true).then(function(ok){
       try{
         if(role){
@@ -333,9 +343,12 @@
     if(busy) return Promise.resolve(false);
     busy=true;
     if(showMsg) toast('همگام‌سازی...');
-    return pull(!!showMsg).then(function(){
-      dirty=true;
-      return push(true);
+    // Push first if dirty, then pull
+    var chain = dirty ? push(true) : Promise.resolve(true);
+    return chain.then(function(){
+      dirty=false;
+      localEditUntil=0;
+      return pull(!!showMsg);
     }).then(function(ok){
       if(showMsg) toast(ok?('✓ همگام شد — '+(lastSummary||'')):'انجام شد');
       try{ if(typeof render==='function') render(); }catch(e){}
@@ -347,9 +360,9 @@
     stopForegroundPull();
     pullTimer=setInterval(function(){
       if(document.visibilityState!=='visible') return;
-      if(writing || busy) return;
+      if(writing || busy || dirty || inGrace()) return;
       pull(false);
-    }, 4000);
+    }, 5000);
   }
   function stopForegroundPull(){
     if(pullTimer){ clearInterval(pullTimer); pullTimer=null; }
@@ -365,8 +378,8 @@
     hardReset();
   }
 
-  // Only real edits set dirty + push
-  saveProfile = function(){ schedulePush(true); };
+  // Every edit → instant protected push
+  saveProfile = function(){ schedulePush(); };
   startFirebaseSync = function(){};
 
   document.addEventListener('click', function(e){
@@ -377,8 +390,8 @@
     if(a==='hard-sync'){ e.preventDefault(); e.stopPropagation(); hardReset(); }
     if(a==='push-cloud'){
       e.preventDefault(); e.stopPropagation();
-      toast('ارسال...'); dirty=true;
-      push(true).then(function(ok){ toast(ok?('✓ '+lastSummary):'ارسال نشد'); });
+      toast('ارسال...'); dirty=true; localEditUntil=Date.now()+15000;
+      push(true).then(function(ok){ toast(ok?('✓ '+lastSummary):'ارسال نشد — دوباره تلاش می‌شود'); });
     }
     if(a==='set-cloud'){
       e.preventDefault(); e.stopPropagation();
@@ -387,13 +400,19 @@
       setCloudApi(u);
     }
     if(a==='theme'){ setTimeout(function(){ if(S&&S.theme) saveTheme(S.theme); }, 30); }
+
+    // Any mark/behavior click extends grace even before saveProfile
+    if(a==='mark' || a==='mark-beh' || a==='claim' || a==='del-note'){
+      localEditUntil = Date.now() + 15000;
+      dirty = true;
+    }
   }, true);
 
   function syncBar(){
     return '<div style="display:flex;flex-direction:column;gap:8px;align-items:center;margin:8px 0 12px">'+
       '<button type="button" class="btn" data-act="force-sync" style="width:85%;background:linear-gradient(90deg,#6B3FBF,#9B6DFF)">☁️ همگام‌سازی الان</button>'+
       '<button type="button" class="ghost" data-act="hard-sync" style="font-size:12px;font-weight:700">🔄 بازنشانی کامل از ابر</button>'+
-      '<p class="muted" style="font-size:11px;text-align:center;margin:0">ارسال بعد از ثبت · دریافت وقتی اپ باز است</p>'+
+      '<p class="muted" style="font-size:11px;text-align:center;margin:0">ثبت فوری در ابر · بدون برگشت به حالت قبل</p>'+
       '</div>';
   }
 
@@ -416,7 +435,7 @@
       html=html.replace(/<section class="card"><div class="card-h"><h2>☁️[\s\S]*?<\/section>/g,'');
       var box='<section class="card"><div class="card-h"><h2>☁️ همگام‌سازی ابر</h2></div>';
       box+='<p class="muted" dir="ltr" style="font-size:11px">'+getCloudBase()+'</p>';
-      box+='<p class="muted" style="font-size:12px;color:var(--pos);font-weight:700">محافظت در برابر بازنویسی اشتباه فعال است</p>';
+      box+='<p class="muted" style="font-size:12px;color:var(--pos);font-weight:700">ثبت خودکار بعد از هر تغییر</p>';
       if(lastSummary) box+='<p class="muted" style="font-size:12px">'+lastSummary+'</p>';
       box+='<button type="button" class="btn" data-act="force-sync" style="width:100%;margin-bottom:8px">همگام‌سازی الان</button>';
       box+='<button type="button" class="btn" data-act="push-cloud" style="width:100%;margin-bottom:8px">ارسال کامل به ابر</button>';
@@ -444,17 +463,20 @@
       if(typeof S==='undefined'){
         if(tries<50) return setTimeout(wait,100);
       }
-      // Boot: pull only — do NOT push until user edits (prevents stale overwrite)
-      dirty=false;
+      dirty=false; localEditUntil=0;
       pull(false).then(function(){ pulledOnce=true; dirty=false; });
       startForegroundPull();
       document.addEventListener('visibilitychange', function(){
         if(document.visibilityState==='visible'){
-          pull(false);
+          if(!dirty && !inGrace()) pull(false);
           startForegroundPull();
         }else stopForegroundPull();
       });
-      try{ window.addEventListener('online', function(){ setTimeout(function(){ pull(false); }, 200); }); }catch(e){}
+      try{
+        window.addEventListener('online', function(){
+          setTimeout(function(){ if(dirty) push(true); else pull(false); }, 200);
+        });
+      }catch(e){}
     })();
   }
 
@@ -464,12 +486,13 @@
 
   window.__sarinaSync={
     pull:function(){return pull(true)},
-    push:function(){ dirty=true; return push(true); },
+    push:function(){ dirty=true; localEditUntil=Date.now()+15000; return push(true); },
     sync:function(){return fullSync(true)},
     hard:hardReset,
     setCloud:setCloudApi,
     online:function(){return online},
-    summary:function(){return lastSummary}
+    summary:function(){return lastSummary},
+    dirty:function(){return dirty}
   };
-  console.log('sync-fix v18 anti-stale');
+  console.log('sync-fix v19 no-revert');
 })();
