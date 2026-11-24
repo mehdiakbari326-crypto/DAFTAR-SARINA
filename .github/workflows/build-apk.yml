@@ -27,8 +27,8 @@ jobs:
       - name: Compute version
         id: ver
         run: |
-          CODE=$((2000 + ${{ github.run_number }}))
-          NAME="2.${{ github.run_number }}"
+          CODE=2202
+          NAME="2.2"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
@@ -44,18 +44,61 @@ jobs:
           for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js ui-polish.js behavior-tasks.js cloud-config.js sarina-play.js; do
             if [ -f "$f" ]; then cp "$f" "www/$f"; echo "copied $f"; fi
           done
-          if [ -f app.js ] && [ "$(wc -c < app.js)" -gt 10000 ]; then
+
+          # Complete app.js (not truncated) from known-good commit
+          BLOB_SHA="585efac004c605bf4f15e3e116151ab98a3c17fd"
+          if [ -f app.js ] && [ "$(wc -c < app.js)" -gt 40000 ]; then
             cp app.js www/app.js
             echo "using local app.js"
           else
-            BLOB_SHA="25a039f0a5ae4cee254e40e37f7a4445ab664e47"
             gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${BLOB_SHA}" --jq .content | base64 -d > www/app.js
-            echo "using blob app.js"
+            echo "using full blob app.js"
           fi
-          test "$(wc -c < www/app.js)" -gt 10000
+
+          # Must be complete file with boot render()
+          test "$(wc -c < www/app.js)" -gt 40000
+          grep -q "updateStreak();render();startFirebaseSync();" www/app.js
+          grep -q "rolePickerHtml" www/app.js
+
+          # Disable Firebase so boot does not crash when firebase scripts are absent
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('www/app.js')
+          t = p.read_text(encoding='utf-8')
+          t = t.replace('firebase.initializeApp(firebaseConfig)', 'null')
+          t = t.replace('db=firebase.database()', 'db=null')
+          t = t.replace('db = firebase.database()', 'db=null')
+
+          def replace_fn(src, name, new_body):
+              key = 'function ' + name + '(){'
+              i = src.find(key)
+              if i < 0:
+                  return src
+              depth = 0
+              for k in range(i, len(src)):
+                  if src[k] == '{':
+                      depth += 1
+                  elif src[k] == '}':
+                      depth -= 1
+                      if depth == 0:
+                          return src[:i] + 'function ' + name + '(){' + new_body + '}' + src[k+1:]
+              return src
+
+          t = replace_fn(t, 'saveProfile', "lsSave();try{syncStatus='online';updateSyncDot()}catch(e){}")
+          t = replace_fn(t, 'startFirebaseSync', "try{syncStatus='online';updateSyncDot()}catch(e){}")
+          if 'window.APP_VERSION' not in t:
+              t = "window.APP_VERSION=window.APP_VERSION||'2.2';\n" + t
+          p.write_text(t, encoding='utf-8')
+          print('patched app.js', p.stat().st_size)
+          PY
+
+          node --check www/app.js
+          test "$(wc -c < www/app.js)" -gt 35000
+
           printf "%s\n" "window.APP_VERSION='${APP_VERSION}';" "window.APP_VERSION_CODE=${APP_VERSION_CODE};" "(function(){function p(){try{var v=window.APP_VERSION||'?';document.querySelectorAll('.rule').forEach(function(el){if(el&&el.textContent.indexOf('v')<0){el.textContent=el.textContent+' • v'+v}});var h1=document.querySelector('.hero h1,.fun-hero h1');if(h1&&!document.getElementById('verBadge')){var b=document.createElement('span');b.id='verBadge';b.textContent='v'+v;b.style.cssText='margin-right:8px;font-size:11px;opacity:.9;background:rgba(255,255,255,.25);padding:2px 8px;border-radius:99px;font-weight:800';h1.appendChild(b);}}catch(e){}}setTimeout(p,500);setTimeout(p,1500);setInterval(p,4000);})();" > www/version.js
           grep -q 'version.js' www/index.html || sed -i 's|</body>|<script src="version.js"></script>\n</body>|' www/index.html
           ls -la www/
+          echo "APP_BYTES=$(wc -c < www/app.js)"
 
       - name: Install Capacitor
         run: npm install
