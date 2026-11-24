@@ -27,8 +27,8 @@ jobs:
       - name: Compute version
         id: ver
         run: |
-          CODE=2202
-          NAME="2.2"
+          CODE=2203
+          NAME="2.3"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
@@ -41,11 +41,10 @@ jobs:
           set -e
           mkdir -p www
           cp index.html www/index.html
-          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js ui-polish.js behavior-tasks.js cloud-config.js sarina-play.js; do
+          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js ui-polish.js behavior-tasks.js cloud-config.js sarina-play.js display-fix.js; do
             if [ -f "$f" ]; then cp "$f" "www/$f"; echo "copied $f"; fi
           done
 
-          # Complete app.js (not truncated) from known-good commit
           BLOB_SHA="585efac004c605bf4f15e3e116151ab98a3c17fd"
           if [ -f app.js ] && [ "$(wc -c < app.js)" -gt 40000 ]; then
             cp app.js www/app.js
@@ -55,12 +54,11 @@ jobs:
             echo "using full blob app.js"
           fi
 
-          # Must be complete file with boot render()
           test "$(wc -c < www/app.js)" -gt 40000
           grep -q "updateStreak();render();startFirebaseSync();" www/app.js
           grep -q "rolePickerHtml" www/app.js
+          test -f www/display-fix.js
 
-          # Disable Firebase so boot does not crash when firebase scripts are absent
           python3 - <<'PY'
           from pathlib import Path
           p = Path('www/app.js')
@@ -87,7 +85,7 @@ jobs:
           t = replace_fn(t, 'saveProfile', "lsSave();try{syncStatus='online';updateSyncDot()}catch(e){}")
           t = replace_fn(t, 'startFirebaseSync', "try{syncStatus='online';updateSyncDot()}catch(e){}")
           if 'window.APP_VERSION' not in t:
-              t = "window.APP_VERSION=window.APP_VERSION||'2.2';\n" + t
+              t = "window.APP_VERSION=window.APP_VERSION||'2.3';\n" + t
           p.write_text(t, encoding='utf-8')
           print('patched app.js', p.stat().st_size)
           PY
