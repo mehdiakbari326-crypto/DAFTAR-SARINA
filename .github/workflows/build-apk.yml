@@ -28,7 +28,7 @@ jobs:
         id: ver
         run: |
           CODE=$((2000 + ${{ github.run_number }}))
-          NAME="1.${{ github.run_number }}"
+          NAME="2.${{ github.run_number }}"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
@@ -44,8 +44,14 @@ jobs:
           for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js ui-polish.js behavior-tasks.js cloud-config.js sarina-play.js; do
             if [ -f "$f" ]; then cp "$f" "www/$f"; echo "copied $f"; fi
           done
-          BLOB_SHA="25a039f0a5ae4cee254e40e37f7a4445ab664e47"
-          gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${BLOB_SHA}" --jq .content | base64 -d > www/app.js
+          if [ -f app.js ] && [ "$(wc -c < app.js)" -gt 10000 ]; then
+            cp app.js www/app.js
+            echo "using local app.js"
+          else
+            BLOB_SHA="25a039f0a5ae4cee254e40e37f7a4445ab664e47"
+            gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${BLOB_SHA}" --jq .content | base64 -d > www/app.js
+            echo "using blob app.js"
+          fi
           test "$(wc -c < www/app.js)" -gt 10000
           printf "%s\n" "window.APP_VERSION='${APP_VERSION}';" "window.APP_VERSION_CODE=${APP_VERSION_CODE};" "(function(){function p(){try{var v=window.APP_VERSION||'?';document.querySelectorAll('.rule').forEach(function(el){if(el&&el.textContent.indexOf('v')<0){el.textContent=el.textContent+' • v'+v}});var h1=document.querySelector('.hero h1,.fun-hero h1');if(h1&&!document.getElementById('verBadge')){var b=document.createElement('span');b.id='verBadge';b.textContent='v'+v;b.style.cssText='margin-right:8px;font-size:11px;opacity:.9;background:rgba(255,255,255,.25);padding:2px 8px;border-radius:99px;font-weight:800';h1.appendChild(b);}}catch(e){}}setTimeout(p,500);setTimeout(p,1500);setInterval(p,4000);})();" > www/version.js
           grep -q 'version.js' www/index.html || sed -i 's|</body>|<script src="version.js"></script>\n</body>|' www/index.html
