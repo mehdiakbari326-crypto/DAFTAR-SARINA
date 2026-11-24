@@ -27,8 +27,8 @@ jobs:
       - name: Compute version
         id: ver
         run: |
-          CODE=2203
-          NAME="2.3"
+          CODE=2204
+          NAME="2.4"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
@@ -41,7 +41,7 @@ jobs:
           set -e
           mkdir -p www
           cp index.html www/index.html
-          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js ui-polish.js behavior-tasks.js cloud-config.js sarina-play.js display-fix.js; do
+          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js ui-polish.js behavior-tasks.js cloud-config.js sarina-play.js display-fix.js perf-fix.js; do
             if [ -f "$f" ]; then cp "$f" "www/$f"; echo "copied $f"; fi
           done
 
@@ -58,6 +58,7 @@ jobs:
           grep -q "updateStreak();render();startFirebaseSync();" www/app.js
           grep -q "rolePickerHtml" www/app.js
           test -f www/display-fix.js
+          test -f www/perf-fix.js
 
           python3 - <<'PY'
           from pathlib import Path
@@ -85,7 +86,7 @@ jobs:
           t = replace_fn(t, 'saveProfile', "lsSave();try{syncStatus='online';updateSyncDot()}catch(e){}")
           t = replace_fn(t, 'startFirebaseSync', "try{syncStatus='online';updateSyncDot()}catch(e){}")
           if 'window.APP_VERSION' not in t:
-              t = "window.APP_VERSION=window.APP_VERSION||'2.3';\n" + t
+              t = "window.APP_VERSION=window.APP_VERSION||'2.4';\n" + t
           p.write_text(t, encoding='utf-8')
           print('patched app.js', p.stat().st_size)
           PY
@@ -93,7 +94,7 @@ jobs:
           node --check www/app.js
           test "$(wc -c < www/app.js)" -gt 35000
 
-          printf "%s\n" "window.APP_VERSION='${APP_VERSION}';" "window.APP_VERSION_CODE=${APP_VERSION_CODE};" "(function(){function p(){try{var v=window.APP_VERSION||'?';document.querySelectorAll('.rule').forEach(function(el){if(el&&el.textContent.indexOf('v')<0){el.textContent=el.textContent+' • v'+v}});var h1=document.querySelector('.hero h1,.fun-hero h1');if(h1&&!document.getElementById('verBadge')){var b=document.createElement('span');b.id='verBadge';b.textContent='v'+v;b.style.cssText='margin-right:8px;font-size:11px;opacity:.9;background:rgba(255,255,255,.25);padding:2px 8px;border-radius:99px;font-weight:800';h1.appendChild(b);}}catch(e){}}setTimeout(p,500);setTimeout(p,1500);setInterval(p,4000);})();" > www/version.js
+          printf "%s\n" "window.APP_VERSION='${APP_VERSION}';" "window.APP_VERSION_CODE=${APP_VERSION_CODE};" "(function(){function p(){try{var v=window.APP_VERSION||'?';document.querySelectorAll('.rule').forEach(function(el){if(el&&el.textContent.indexOf('v')<0){el.textContent=el.textContent+' • v'+v}});var h1=document.querySelector('.hero h1,.fun-hero h1');if(h1&&!document.getElementById('verBadge')){var b=document.createElement('span');b.id='verBadge';b.textContent='v'+v;b.style.cssText='margin-right:8px;font-size:11px;opacity:.9;background:rgba(255,255,255,.25);padding:2px 8px;border-radius:99px;font-weight:800';h1.appendChild(b);}}catch(e){}}setTimeout(p,500);setTimeout(p,1500);})();" > www/version.js
           grep -q 'version.js' www/index.html || sed -i 's|</body>|<script src="version.js"></script>\n</body>|' www/index.html
           ls -la www/
           echo "APP_BYTES=$(wc -c < www/app.js)"
