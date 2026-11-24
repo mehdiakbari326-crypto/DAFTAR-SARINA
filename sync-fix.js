@@ -1,8 +1,7 @@
-/* Sync v21 — solid: no Firebase, no revert
- * - saveProfile → instant push to Cloudflare
- * - never pull while dirty/grace (15s)
+/* Sync v21.4 — perf: 12s idle pull, 180ms push coalesce
+ * - saveProfile → coalesced push to Cloudflare
+ * - never pull while dirty/grace
  * - push merges local days over remote (local marks win)
- * - server worker v3 pickLonger protects lists
  */
 (function(){
   var THEME_KEY='daftar-theme-local';
@@ -231,7 +230,7 @@
     dirty = true;
     localEditUntil = Date.now() + 20000;
     if(pushTimer) clearTimeout(pushTimer);
-    pushTimer = setTimeout(function(){ push(); }, 60);
+    pushTimer = setTimeout(function(){ push(); }, 180);
   }
 
   function hardReset(){
@@ -271,7 +270,7 @@
       if(document.visibilityState!=='visible') return;
       if(writing || busy || dirty || inGrace()) return;
       pull(false);
-    }, 6000);
+    }, 12000);
   }
 
   saveProfile = function(){ schedulePush(); };
@@ -297,40 +296,6 @@
     }
     if(a==='theme'){ setTimeout(function(){ if(S&&S.theme) saveTheme(S.theme); }, 40); }
   }, true);
-
-  function syncBar(){
-    return '<div style="display:flex;flex-direction:column;gap:8px;align-items:center;margin:8px 0 12px">'+
-      '<button type="button" class="btn" data-act="force-sync" style="width:85%;background:linear-gradient(90deg,#6B3FBF,#9B6DFF)">☁️ همگام‌سازی الان</button>'+
-      '<button type="button" class="ghost" data-act="hard-sync" style="font-size:12px;font-weight:700">🔄 بازنشانی کامل از ابر</button>'+
-      '<p class="muted" style="font-size:11px;text-align:center;margin:0">ثبت فوری · بدون برگشت</p></div>';
-  }
-  var _todayView=typeof todayView==='function'?todayView:null;
-  if(_todayView){
-    todayView=function(){
-      var html=_todayView();
-      if(html.indexOf('data-act="force-sync"')>=0) return html;
-      if(html.indexOf('class="level-card"')>=0)
-        html=html.replace(/(<section class="level-card"[\s\S]*?<\/section>)/, function(m){ return m+syncBar(); });
-      else html=syncBar()+html;
-      return html;
-    };
-  }
-  var _settingsView=typeof settingsView==='function'?settingsView:null;
-  if(_settingsView){
-    settingsView=function(){
-      var html=_settingsView();
-      html=html.replace(/<section class="card"><div class="card-h"><h2>☁️[\s\S]*?<\/section>/g,'');
-      var box='<section class="card"><div class="card-h"><h2>☁️ همگام‌سازی ابر</h2></div>';
-      box+='<p class="muted" dir="ltr" style="font-size:11px">'+getCloudBase()+'</p>';
-      box+='<p class="muted" style="font-size:12px;color:var(--pos);font-weight:700">Firebase قطع است · فقط Cloudflare</p>';
-      if(lastSummary) box+='<p class="muted" style="font-size:12px">'+lastSummary+'</p>';
-      box+='<button type="button" class="btn" data-act="force-sync" style="width:100%;margin-bottom:8px">همگام‌سازی الان</button>';
-      box+='<button type="button" class="btn" data-act="push-cloud" style="width:100%;margin-bottom:8px">ارسال کامل به ابر</button>';
-      box+='<button type="button" class="ghost" data-act="hard-sync" style="width:100%;margin-bottom:8px">بازنشانی کامل از ابر</button>';
-      box+='<button type="button" class="ghost" data-act="set-cloud" style="width:100%">تغییر آدرس ابر</button></section>';
-      return html+box;
-    };
-  }
 
   function boot(){
     applyThemeLocal();
@@ -369,5 +334,5 @@
     online:function(){return online},
     summary:function(){return lastSummary}
   };
-  console.log('sync-fix v21 solid no-revert');
+  console.log('sync-fix v21.4 perf: 12s pull, 180ms push coalesce');
 })();
