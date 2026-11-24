@@ -27,8 +27,8 @@ jobs:
       - name: Compute version
         id: ver
         run: |
-          CODE=2204
-          NAME="2.4"
+          CODE=2205
+          NAME="2.5"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
@@ -41,7 +41,7 @@ jobs:
           set -e
           mkdir -p www
           cp index.html www/index.html
-          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js ui-polish.js behavior-tasks.js cloud-config.js sarina-play.js display-fix.js perf-fix.js; do
+          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js ui-polish.js behavior-tasks.js cloud-config.js sarina-play.js display-fix.js cheer-gate.js; do
             if [ -f "$f" ]; then cp "$f" "www/$f"; echo "copied $f"; fi
           done
 
@@ -58,7 +58,7 @@ jobs:
           grep -q "updateStreak();render();startFirebaseSync();" www/app.js
           grep -q "rolePickerHtml" www/app.js
           test -f www/display-fix.js
-          test -f www/perf-fix.js
+          test -f www/cheer-gate.js
 
           python3 - <<'PY'
           from pathlib import Path
@@ -85,8 +85,18 @@ jobs:
 
           t = replace_fn(t, 'saveProfile', "lsSave();try{syncStatus='online';updateSyncDot()}catch(e){}")
           t = replace_fn(t, 'startFirebaseSync', "try{syncStatus='online';updateSyncDot()}catch(e){}")
+
+          # Motivate toasts only on child device
+          old = "if(d.s==='done'){showToast(MOTIVATE[Math.floor(Math.random()*MOTIVATE.length)]);celebrate();if(deviceRole==='child'&&!isParent)notifyTaskDone(title)}"
+          new = "if(d.s==='done'){if(deviceRole==='child'){showToast(MOTIVATE[Math.floor(Math.random()*MOTIVATE.length)]);celebrate();notifyTaskDone(title)}else{showToast('ثبت شد ✓')}}"
+          if old in t:
+              t = t.replace(old, new)
+              print('motivate gated')
+          else:
+              print('motivate pattern missing')
+
           if 'window.APP_VERSION' not in t:
-              t = "window.APP_VERSION=window.APP_VERSION||'2.4';\n" + t
+              t = "window.APP_VERSION=window.APP_VERSION||'2.5';\n" + t
           p.write_text(t, encoding='utf-8')
           print('patched app.js', p.stat().st_size)
           PY
