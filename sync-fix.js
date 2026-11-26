@@ -1,7 +1,7 @@
-/* Sync v21.4 — perf: 12s idle pull, 180ms push coalesce
+/* Sync v22 — deletes stick: settings lists use local on push (no pickLonger)
  * - saveProfile → coalesced push to Cloudflare
  * - never pull while dirty/grace
- * - push merges local days over remote (local marks win)
+ * - days merge; tasks/rewards/health/behaviors = local wins on push
  */
 (function(){
   var THEME_KEY='daftar-theme-local';
@@ -150,6 +150,13 @@
       if(dirty || inGrace()){
         remote = clone(remote);
         remote.days = mergeDays(remote.days||{}, (S&&S.days)||{});
+        // while editing settings, keep local lists so delete does not bounce back
+        remote.tasks = S.tasks;
+        remote.rewards = S.rewards;
+        remote.healthItems = S.healthItems;
+        remote.posBehaviors = S.posBehaviors;
+        remote.negBehaviors = S.negBehaviors;
+        remote.goal = S.goal;
       }
       var remoteAt = remote._updatedAt || 0;
       var changed = sigOf(remote) !== lastSig || remoteAt > lastRemoteAt;
@@ -180,12 +187,9 @@
       setDot(true);
       remote = remote || {};
       var payload = clone(localSnapshot);
+      // days: merge; settings lists (tasks/rewards/health/behaviors): LOCAL wins so deletes stick
       payload.days = mergeDays(remote.days||{}, localSnapshot.days||{});
-      if((remote.tasks||[]).length > (payload.tasks||[]).length) payload.tasks = clone(remote.tasks);
-      if((remote.healthItems||[]).length > (payload.healthItems||[]).length) payload.healthItems = clone(remote.healthItems);
-      if((remote.rewards||[]).length > (payload.rewards||[]).length) payload.rewards = clone(remote.rewards);
-      if((remote.posBehaviors||[]).length > (payload.posBehaviors||[]).length) payload.posBehaviors = clone(remote.posBehaviors);
-      if((remote.negBehaviors||[]).length > (payload.negBehaviors||[]).length) payload.negBehaviors = clone(remote.negBehaviors);
+      // do NOT restore longer remote arrays — that undoes parent deletes
       try{
         var map={};
         (remote.pendingChanges||[]).concat(payload.pendingChanges||[]).forEach(function(p){ if(p&&p.id) map[p.id]=p; });
@@ -200,6 +204,12 @@
         if(saved && typeof saved==='object'){
           saved = clone(saved);
           saved.days = mergeDays(saved.days||{}, localSnapshot.days||{});
+          // keep local settings lists if we just edited/deleted (server may lag)
+          saved.tasks = localSnapshot.tasks;
+          saved.rewards = localSnapshot.rewards;
+          saved.healthItems = localSnapshot.healthItems;
+          saved.posBehaviors = localSnapshot.posBehaviors;
+          saved.negBehaviors = localSnapshot.negBehaviors;
           applyRemote(saved);
           lastSig = sigOf(saved);
           lastRemoteAt = saved._updatedAt || payload._updatedAt;
@@ -291,7 +301,7 @@
       try{ localStorage.setItem(CFG_KEY,u); }catch(e){}
       window.CLOUD_API=u; hardReset();
     }
-    if(a==='mark' || a==='mark-beh' || a==='claim' || a==='del-note'){
+    if(a==='mark' || a==='mark-beh' || a==='claim' || a==='del-note' || a==='del-task-perm' || a==='del-reward' || a==='del-health' || a==='del-pos-beh' || a==='del-neg-beh'){
       dirty=true; localEditUntil=Date.now()+20000;
     }
     if(a==='theme'){ setTimeout(function(){ if(S&&S.theme) saveTheme(S.theme); }, 40); }
@@ -334,5 +344,5 @@
     online:function(){return online},
     summary:function(){return lastSummary}
   };
-  console.log('sync-fix v21.4 perf: 12s pull, 180ms push coalesce');
+  console.log('sync-fix v22: deletes stick (no pickLonger on lists)');
 })();
