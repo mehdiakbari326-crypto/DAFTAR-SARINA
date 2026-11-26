@@ -1,4 +1,4 @@
-/* Sarina Daftar Worker — server-side merge, anti-stale overwrite */
+/* Sarina Daftar Worker v3 — LWW lists so deletes stick; days deep-merge */
 const KEY = 'family/sarina';
 
 function corsHeaders() {
@@ -23,12 +23,11 @@ function mergeDays(a, b) {
     const da = (a && a[k]) || {};
     const db = (b && b[k]) || {};
     const tasks = { ...(da.tasks || {}), ...(db.tasks || {}) };
-    // last status wins if both set — prefer explicit incoming (b) over a when both present
     for (const tid of Object.keys(da.tasks || {})) {
       if (!(db.tasks && db.tasks[tid]) && da.tasks[tid]) tasks[tid] = da.tasks[tid];
     }
     for (const tid of Object.keys(db.tasks || {})) {
-      tasks[tid] = db.tasks[tid]; // b wins on conflict
+      tasks[tid] = db.tasks[tid];
     }
     const seen = new Set();
     const notes = [];
@@ -48,10 +47,12 @@ function mergeDays(a, b) {
   return out;
 }
 
-function pickLonger(a, b) {
-  const aa = Array.isArray(a) ? a : [];
-  const bb = Array.isArray(b) ? b : [];
-  return bb.length >= aa.length ? bb : aa;
+/** Newer list wins; empty newer never wipes non-empty older (stale client guard). */
+function preferList(nArr, oArr) {
+  const n = Array.isArray(nArr) ? nArr : [];
+  const o = Array.isArray(oArr) ? oArr : [];
+  if (n.length === 0 && o.length > 0) return o;
+  return n.length || !o.length ? n : o;
 }
 
 function mergeFamily(current, incoming) {
@@ -60,31 +61,29 @@ function mergeFamily(current, incoming) {
   const curAt = current._updatedAt || 0;
   const incAt = incoming._updatedAt || Date.now();
 
-  // Base: newer top-level scalar wins; arrays: longer wins; days: deep merge
   const newer = incAt >= curAt ? incoming : current;
   const older = incAt >= curAt ? current : incoming;
 
   const merged = {
     name: newer.name != null ? newer.name : older.name,
-    tasks: pickLonger(older.tasks, newer.tasks),
+    tasks: preferList(newer.tasks, older.tasks),
     days: mergeDays(older.days, newer.days),
-    rewards: pickLonger(older.rewards, newer.rewards),
-    claims: pickLonger(older.claims, newer.claims),
+    rewards: preferList(newer.rewards, older.rewards),
+    claims: preferList(newer.claims, older.claims),
     goal: newer.goal != null ? newer.goal : older.goal,
-    parentTasks: pickLonger(older.parentTasks, newer.parentTasks),
+    parentTasks: preferList(newer.parentTasks, older.parentTasks),
     parentPin: newer.parentPin || older.parentPin || '1234',
-    posBehaviors: pickLonger(older.posBehaviors, newer.posBehaviors),
-    negBehaviors: pickLonger(older.negBehaviors, newer.negBehaviors),
+    posBehaviors: preferList(newer.posBehaviors, older.posBehaviors),
+    negBehaviors: preferList(newer.negBehaviors, older.negBehaviors),
     streak: newer.streak != null ? newer.streak : older.streak,
     lastActive: newer.lastActive || older.lastActive || '',
-    pendingChanges: pickLonger(older.pendingChanges, newer.pendingChanges),
-    healthItems: pickLonger(older.healthItems, newer.healthItems),
+    pendingChanges: preferList(newer.pendingChanges, older.pendingChanges),
+    healthItems: preferList(newer.healthItems, older.healthItems),
     play: newer.play || older.play || {},
     _updatedAt: Math.max(curAt, incAt, Date.now()),
     _device: incoming._device || current._device || '',
   };
 
-  // pending: union by id
   try {
     const map = {};
     for (const p of [...(older.pendingChanges || []), ...(newer.pendingChanges || [])]) {
@@ -106,7 +105,7 @@ export default {
     const path = url.pathname.replace(/\/+$/, '') || '/';
 
     if (path === '/' || path === '/health') {
-      return jsonResponse({ ok: true, service: 'sarina-daftar', v: 2 });
+      return jsonResponse({ ok: true, service: 'sarina-daftar', v: 3 });
     }
 
     if (path !== '/family/sarina') {
@@ -130,7 +129,6 @@ export default {
         let current = {};
         try { current = raw ? JSON.parse(raw) : {}; } catch (e) { current = {}; }
 
-        // Always server-merge so a stale phone cannot wipe fresher marks
         const merged = mergeFamily(current, incoming);
         merged._updatedAt = Date.now();
         await env.SARINA_KV.put(KEY, JSON.stringify(merged));
