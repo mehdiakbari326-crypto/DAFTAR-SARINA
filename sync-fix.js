@@ -1,4 +1,4 @@
-/* Sync v23 — deletes stick: settings lists use local on push (no pickLonger)
+/* Sync v23 — deletes stick: do NOT restore longer remote arrays; settings lists use local on push (no pickLonger)
  * - saveProfile → coalesced push to Cloudflare
  * - never pull while dirty/grace
  * - days merge; tasks/rewards/health/behaviors = local wins on push
@@ -196,7 +196,6 @@
     if(!url) return Promise.resolve(false);
     var localSnapshot = sharedFrom(S);
     if(!localSnapshot) return Promise.resolve(false);
-    // allow push even with empty tasks so health/claims still sync
 
     writing=true;
     return httpGet(url).then(function(remote){
