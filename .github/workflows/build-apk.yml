@@ -27,8 +27,8 @@ jobs:
       - name: Compute version
         id: ver
         run: |
-          CODE=2206
-          NAME="2.6"
+          CODE=2207
+          NAME="2.7"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
@@ -41,7 +41,7 @@ jobs:
           set -e
           mkdir -p www
           cp index.html www/index.html
-          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js ui-polish.js behavior-tasks.js cloud-config.js sarina-play.js display-fix.js cheer-gate.js; do
+          for f in app2.js role-hard.js approve-fix.js enhance.js weight.js persist-guard.js settings-ui.js sync-fix.js health-ui.js report-fix.js ui-polish.js behavior-tasks.js cloud-config.js sarina-play.js display-fix.js cheer-gate.js features-v27.js; do
             if [ -f "$f" ]; then cp "$f" "www/$f"; echo "copied $f"; fi
           done
 
@@ -59,6 +59,7 @@ jobs:
           grep -q "rolePickerHtml" www/app.js
           test -f www/display-fix.js
           test -f www/cheer-gate.js
+          test -f www/features-v27.js
           grep -q 'do NOT restore longer' www/sync-fix.js
 
           python3 - <<'PY'
@@ -96,7 +97,7 @@ jobs:
               print('motivate pattern missing')
 
           if 'window.APP_VERSION' not in t:
-              t = "window.APP_VERSION=window.APP_VERSION||'2.6';\n" + t
+              t = "window.APP_VERSION=window.APP_VERSION||'2.7';\n" + t
           p.write_text(t, encoding='utf-8')
           print('patched app.js', p.stat().st_size)
           PY
