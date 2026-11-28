@@ -1,4 +1,4 @@
-/* Sarina Daftar Worker v3 — LWW lists so deletes stick; days deep-merge */
+/* Sarina Daftar Worker v4 — LWW lists, days reset, health lastDate clear */
 const KEY = 'family/sarina';
 
 function corsHeaders() {
@@ -43,11 +43,12 @@ function mergeDays(a, b) {
     out[k] = { tasks, notes };
     if (weight != null) out[k].weight = weight;
     if (Object.keys(behaviors).length) out[k].behaviors = behaviors;
+    if (db._reset != null) out[k]._reset = db._reset;
+    else if (da._reset != null) out[k]._reset = da._reset;
   }
   return out;
 }
 
-/** Newer list wins; empty newer never wipes non-empty older (stale client guard). */
 function preferList(nArr, oArr) {
   const n = Array.isArray(nArr) ? nArr : [];
   const o = Array.isArray(oArr) ? oArr : [];
@@ -60,14 +61,36 @@ function mergeFamily(current, incoming) {
   incoming = incoming || {};
   const curAt = current._updatedAt || 0;
   const incAt = incoming._updatedAt || Date.now();
-
   const newer = incAt >= curAt ? incoming : current;
   const older = incAt >= curAt ? current : incoming;
+
+  const incReset = (incoming._daysResetAt && incoming._daysResetAt._all) || 0;
+  const curReset = (current._daysResetAt && current._daysResetAt._all) || 0;
+  let daysMerged;
+  if (incReset > curReset) {
+    daysMerged = incoming.days && typeof incoming.days === 'object' ? incoming.days : {};
+  } else {
+    daysMerged = mergeDays(older.days, newer.days);
+  }
+
+  let healthMerged = preferList(newer.healthItems, older.healthItems);
+  try {
+    if (Array.isArray(newer.healthItems) && Array.isArray(older.healthItems) && newer.healthItems.length) {
+      const byId = {};
+      older.healthItems.forEach(function (it) { if (it && it.id) byId[it.id] = it; });
+      healthMerged = newer.healthItems.map(function (it) {
+        if (!it || !it.id) return it;
+        const o = byId[it.id];
+        if (it.lastDate === '' || it.lastDate == null) return Object.assign({}, o || {}, it, { lastDate: '' });
+        return Object.assign({}, o || {}, it);
+      });
+    }
+  } catch (e) {}
 
   const merged = {
     name: newer.name != null ? newer.name : older.name,
     tasks: preferList(newer.tasks, older.tasks),
-    days: mergeDays(older.days, newer.days),
+    days: daysMerged,
     rewards: preferList(newer.rewards, older.rewards),
     claims: preferList(newer.claims, older.claims),
     goal: newer.goal != null ? newer.goal : older.goal,
@@ -78,8 +101,10 @@ function mergeFamily(current, incoming) {
     streak: newer.streak != null ? newer.streak : older.streak,
     lastActive: newer.lastActive || older.lastActive || '',
     pendingChanges: preferList(newer.pendingChanges, older.pendingChanges),
-    healthItems: preferList(newer.healthItems, older.healthItems),
+    healthItems: healthMerged,
     play: newer.play || older.play || {},
+    theme: newer.theme || older.theme || 'unicorn',
+    _daysResetAt: Object.assign({}, current._daysResetAt || {}, incoming._daysResetAt || {}),
     _updatedAt: Math.max(curAt, incAt, Date.now()),
     _device: incoming._device || current._device || '',
   };
@@ -105,7 +130,7 @@ export default {
     const path = url.pathname.replace(/\/+$/, '') || '/';
 
     if (path === '/' || path === '/health') {
-      return jsonResponse({ ok: true, service: 'sarina-daftar', v: 3 });
+      return jsonResponse({ ok: true, service: 'sarina-daftar', v: 4 });
     }
 
     if (path !== '/family/sarina') {
@@ -128,7 +153,6 @@ export default {
         const raw = await env.SARINA_KV.get(KEY);
         let current = {};
         try { current = raw ? JSON.parse(raw) : {}; } catch (e) { current = {}; }
-
         const merged = mergeFamily(current, incoming);
         merged._updatedAt = Date.now();
         await env.SARINA_KV.put(KEY, JSON.stringify(merged));
