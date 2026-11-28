@@ -53,7 +53,7 @@
         if(key.indexOf('pos:')===0){ if(s==='done') posDone++; if(s==='missed') posMiss++; }
         if(key.indexOf('neg:')===0){ if(s==='done') negDone++; if(s==='missed') negMiss++; }
       });
-      var notePos=(d.notes|| bro[]).filter(function(n){return n.type==='pos'}).length;
+      var notePos=(d.notes||[]).filter(function(n){return n.type==='pos'}).length;
       var noteNeg=(d.notes||[]).filter(function(n){return n.type==='neg'}).length;
       if(Object.keys(beh).length || notePos || noteNeg){
         base.pos = posDone + negMiss + notePos;
