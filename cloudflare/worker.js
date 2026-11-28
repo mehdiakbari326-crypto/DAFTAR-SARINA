@@ -1,4 +1,4 @@
-/* Sarina Daftar Worker v4 — LWW lists, days reset, health lastDate clear */
+/* Sarina Daftar Worker v5 — LWW claims (empty wins), days reset, health lastDate */
 const KEY = 'family/sarina';
 
 function corsHeaders() {
@@ -22,13 +22,7 @@ function mergeDays(a, b) {
   for (const k of keys) {
     const da = (a && a[k]) || {};
     const db = (b && b[k]) || {};
-    const tasks = { ...(da.tasks || {}), ...(db.tasks || {}) };
-    for (const tid of Object.keys(da.tasks || {})) {
-      if (!(db.tasks && db.tasks[tid]) && da.tasks[tid]) tasks[tid] = da.tasks[tid];
-    }
-    for (const tid of Object.keys(db.tasks || {})) {
-      tasks[tid] = db.tasks[tid];
-    }
+    const tasks = Object.assign({}, da.tasks || {}, db.tasks || {});
     const seen = new Set();
     const notes = [];
     for (const n of [...(da.notes || []), ...(db.notes || [])]) {
@@ -39,19 +33,18 @@ function mergeDays(a, b) {
       notes.push(n);
     }
     const weight = db.weight != null ? db.weight : da.weight;
-    const behaviors = { ...(da.behaviors || {}), ...(db.behaviors || {}) };
+    const behaviors = Object.assign({}, da.behaviors || {}, db.behaviors || {});
     out[k] = { tasks, notes };
     if (weight != null) out[k].weight = weight;
     if (Object.keys(behaviors).length) out[k].behaviors = behaviors;
-    if (db._reset != null) out[k]._reset = db._reset;
-    else if (da._reset != null) out[k]._reset = da._reset;
   }
   return out;
 }
 
-function preferList(nArr, oArr) {
+function preferList(nArr, oArr, allowEmpty) {
   const n = Array.isArray(nArr) ? nArr : [];
   const o = Array.isArray(oArr) ? oArr : [];
+  if (allowEmpty) return n;
   if (n.length === 0 && o.length > 0) return o;
   return n.length || !o.length ? n : o;
 }
@@ -63,48 +56,54 @@ function mergeFamily(current, incoming) {
   const incAt = incoming._updatedAt || Date.now();
   const newer = incAt >= curAt ? incoming : current;
   const older = incAt >= curAt ? current : incoming;
+  const incomingIsNewer = incAt >= curAt;
 
   const incReset = (incoming._daysResetAt && incoming._daysResetAt._all) || 0;
   const curReset = (current._daysResetAt && current._daysResetAt._all) || 0;
   let daysMerged;
   if (incReset > curReset) {
     daysMerged = incoming.days && typeof incoming.days === 'object' ? incoming.days : {};
+  } else if (curReset > incReset) {
+    daysMerged = current.days && typeof current.days === 'object' ? current.days : {};
   } else {
-    daysMerged = mergeDays(older.days, newer.days);
+    daysMerged = mergeDays(current.days || {}, incoming.days || {});
   }
 
-  let healthMerged = preferList(newer.healthItems, older.healthItems);
-  try {
-    if (Array.isArray(newer.healthItems) && Array.isArray(older.healthItems) && newer.healthItems.length) {
-      const byId = {};
-      older.healthItems.forEach(function (it) { if (it && it.id) byId[it.id] = it; });
-      healthMerged = newer.healthItems.map(function (it) {
-        if (!it || !it.id) return it;
-        const o = byId[it.id];
-        if (it.lastDate === '' || it.lastDate == null) return Object.assign({}, o || {}, it, { lastDate: '' });
-        return Object.assign({}, o || {}, it);
-      });
-    }
-  } catch (e) {}
+  let claimsMerged;
+  const incClaimReset = incoming._claimsResetAt || 0;
+  const curClaimReset = current._claimsResetAt || 0;
+  if (incClaimReset > curClaimReset) {
+    claimsMerged = Array.isArray(incoming.claims) ? incoming.claims : [];
+  } else if (curClaimReset > incClaimReset) {
+    claimsMerged = Array.isArray(current.claims) ? current.claims : [];
+  } else {
+    claimsMerged = Array.isArray(newer.claims) ? newer.claims : (Array.isArray(older.claims) ? older.claims : []);
+  }
+
+  let healthMerged = preferList(newer.healthItems, older.healthItems, incomingIsNewer && Array.isArray(incoming.healthItems));
+  if (Array.isArray(incoming.healthItems) && incomingIsNewer) {
+    healthMerged = incoming.healthItems;
+  }
 
   const merged = {
-    name: newer.name != null ? newer.name : older.name,
-    tasks: preferList(newer.tasks, older.tasks),
+    name: newer.name || older.name || 'سارینا',
+    tasks: preferList(newer.tasks, older.tasks, false),
     days: daysMerged,
-    rewards: preferList(newer.rewards, older.rewards),
-    claims: preferList(newer.claims, older.claims),
+    rewards: preferList(newer.rewards, older.rewards, false),
+    claims: claimsMerged,
     goal: newer.goal != null ? newer.goal : older.goal,
-    parentTasks: preferList(newer.parentTasks, older.parentTasks),
+    parentTasks: preferList(newer.parentTasks, older.parentTasks, false),
     parentPin: newer.parentPin || older.parentPin || '1234',
-    posBehaviors: preferList(newer.posBehaviors, older.posBehaviors),
-    negBehaviors: preferList(newer.negBehaviors, older.negBehaviors),
-    streak: newer.streak != null ? newer.streak : older.streak,
+    posBehaviors: preferList(newer.posBehaviors, older.posBehaviors, false),
+    negBehaviors: preferList(newer.negBehaviors, older.negBehaviors, false),
+    streak: newer.streak != null ? newer.streak : (older.streak || 0),
     lastActive: newer.lastActive || older.lastActive || '',
-    pendingChanges: preferList(newer.pendingChanges, older.pendingChanges),
+    pendingChanges: preferList(newer.pendingChanges, older.pendingChanges, incomingIsNewer),
     healthItems: healthMerged,
     play: newer.play || older.play || {},
     theme: newer.theme || older.theme || 'unicorn',
     _daysResetAt: Object.assign({}, current._daysResetAt || {}, incoming._daysResetAt || {}),
+    _claimsResetAt: Math.max(curClaimReset, incClaimReset, 0) || undefined,
     _updatedAt: Math.max(curAt, incAt, Date.now()),
     _device: incoming._device || current._device || '',
   };
@@ -114,7 +113,11 @@ function mergeFamily(current, incoming) {
     for (const p of [...(older.pendingChanges || []), ...(newer.pendingChanges || [])]) {
       if (p && p.id) map[p.id] = p;
     }
-    merged.pendingChanges = Object.values(map);
+    if (incomingIsNewer && Array.isArray(incoming.pendingChanges) && incoming.pendingChanges.length === 0) {
+      merged.pendingChanges = [];
+    } else {
+      merged.pendingChanges = Object.values(map);
+    }
   } catch (e) {}
 
   return merged;
@@ -130,7 +133,7 @@ export default {
     const path = url.pathname.replace(/\/+$/, '') || '/';
 
     if (path === '/' || path === '/health') {
-      return jsonResponse({ ok: true, service: 'sarina-daftar', v: 4 });
+      return jsonResponse({ ok: true, service: 'sarina-daftar', v: 5 });
     }
 
     if (path !== '/family/sarina') {
