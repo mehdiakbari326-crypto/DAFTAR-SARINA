@@ -1,7 +1,8 @@
-/* Sync v22 — deletes stick: settings lists use local on push (no pickLonger)
+/* Sync v23 — deletes stick: settings lists use local on push (no pickLonger)
  * - saveProfile → coalesced push to Cloudflare
  * - never pull while dirty/grace
  * - days merge; tasks/rewards/health/behaviors = local wins on push
+ * - health probe on boot; soft offline on blip
  */
 (function(){
   var THEME_KEY='daftar-theme-local';
@@ -25,14 +26,15 @@
     try{
       if(typeof syncStatus!=='undefined') syncStatus=on?'online':'offline';
       if(typeof updateSyncDot==='function') updateSyncDot();
-      document.querySelectorAll('.sync-dot').forEach(function(d){
+      document.querySelectorAll('.sync-dot,#syncDot').forEach(function(d){
         d.classList.toggle('on',!!on); d.classList.toggle('off',!on);
+        try{ d.style.background = on ? '#3ddc97' : '#ff6b6b'; }catch(e){}
       });
     }catch(e){}
   }
   function getCloudBase(){
-    try{ var s=localStorage.getItem(CFG_KEY); if(s) return String(s).replace(/\/+$/,''); }catch(e){}
-    if(typeof window.CLOUD_API==='string'&&window.CLOUD_API) return window.CLOUD_API.replace(/\/+$/,'');
+    try{ var s=localStorage.getItem(CFG_KEY); if(s && String(s).indexOf('https://')===0) return String(s).replace(/\/+$/,''); }catch(e){}
+    if(typeof window.CLOUD_API==='string'&&window.CLOUD_API && window.CLOUD_API.indexOf('https://')===0) return window.CLOUD_API.replace(/\/+$/,'');
     return DEFAULT_CLOUD;
   }
   function cloudUrl(){ var b=getCloudBase(); return b?(b+'/family/sarina'):''; }
@@ -62,16 +64,27 @@
       pendingChanges: clone(Sref.pendingChanges || []),
       healthItems: clone(Sref.healthItems || []),
       play: clone(Sref.play || {}),
-      _updatedAt: Date.now(),
-      _device: bootId
+      _daysResetAt: clone(Sref._daysResetAt || {}),
+      _claimsResetAt: Sref._claimsResetAt || 0
     };
   }
+
   function sigOf(r){
-    try{ return JSON.stringify({t:r.tasks,d:r.days,h:r.healthItems,rw:r.rewards,g:r.goal,pc:r.pendingChanges}); }
-    catch(e){ return String(Math.random()); }
+    try{
+      return JSON.stringify({
+        t:(r.tasks||[]).map(function(x){return x.id+':'+(x.title||'');}),
+        d:Object.keys(r.days||{}).sort().map(function(k){
+          var day=(r.days||{})[k]||{};
+          return k+':'+JSON.stringify(day.tasks||{})+':'+JSON.stringify(day.behaviors||{})+':'+(day.weight!=null?day.weight:'');
+        }),
+        rw:(r.rewards||[]).map(function(x){return x.id+':'+(x.t||'')+':'+(x.c||0);}),
+        h:(r.healthItems||[]).map(function(x){return x.id+':'+(x.cooldownDays||0)+':'+(x.lastDate||'');}),
+        g:r.goal, cl:(r.claims||[]).length, p:(r.pendingChanges||[]).length
+      });
+    }catch(e){ return String(Date.now()); }
   }
+
   function summarize(r){
-    if(!r) return '';
     return 'تسک '+(r.tasks&&r.tasks.length||0)+' | روز '+(r.days?Object.keys(r.days).length:0)+' | پاداش '+(r.rewards&&r.rewards.length||0);
   }
 
@@ -93,6 +106,8 @@
     S.pendingChanges = Array.isArray(r.pendingChanges) ? clone(r.pendingChanges) : (S.pendingChanges||[]);
     S.healthItems = Array.isArray(r.healthItems) ? clone(r.healthItems) : (S.healthItems||[]);
     if(r.play && typeof r.play==='object') S.play = clone(r.play);
+    if(r._daysResetAt) S._daysResetAt = clone(r._daysResetAt);
+    if(r._claimsResetAt) S._claimsResetAt = r._claimsResetAt;
     applyThemeLocal();
     try{ localStorage.setItem('daftar-sarina-v9', JSON.stringify(S)); }catch(e){}
     try{ localStorage.setItem('daftar-sarina-backup-v9', JSON.stringify(S)); }catch(e){}
@@ -150,7 +165,6 @@
       if(dirty || inGrace()){
         remote = clone(remote);
         remote.days = mergeDays(remote.days||{}, (S&&S.days)||{});
-        // while editing settings, keep local lists so delete does not bounce back
         remote.tasks = S.tasks;
         remote.rewards = S.rewards;
         remote.healthItems = S.healthItems;
@@ -169,7 +183,8 @@
       if(dirty) schedulePush();
       return true;
     }).catch(function(){
-      setDot(false);
+      if(lastRemoteAt && (Date.now()-lastRemoteAt)<20000){ /* keep green */ }
+      else setDot(false);
       if(showMsg) toast('خطا دریافت');
       return false;
     });
@@ -180,16 +195,15 @@
     var url=cloudUrl();
     if(!url) return Promise.resolve(false);
     var localSnapshot = sharedFrom(S);
-    if(!localSnapshot.tasks || !localSnapshot.tasks.length) return Promise.resolve(false);
+    if(!localSnapshot) return Promise.resolve(false);
+    // allow push even with empty tasks so health/claims still sync
 
     writing=true;
     return httpGet(url).then(function(remote){
       setDot(true);
       remote = remote || {};
       var payload = clone(localSnapshot);
-      // days: merge; settings lists (tasks/rewards/health/behaviors): LOCAL wins so deletes stick
       payload.days = mergeDays(remote.days||{}, localSnapshot.days||{});
-      // do NOT restore longer remote arrays — that undoes parent deletes
       try{
         var map={};
         (remote.pendingChanges||[]).concat(payload.pendingChanges||[]).forEach(function(p){ if(p&&p.id) map[p.id]=p; });
@@ -204,7 +218,6 @@
         if(saved && typeof saved==='object'){
           saved = clone(saved);
           saved.days = mergeDays(saved.days||{}, localSnapshot.days||{});
-          // keep local settings lists if we just edited/deleted (server may lag)
           saved.tasks = localSnapshot.tasks;
           saved.rewards = localSnapshot.rewards;
           saved.healthItems = localSnapshot.healthItems;
@@ -227,7 +240,8 @@
       });
     }).catch(function(){
       writing=false;
-      setDot(false);
+      if(lastRemoteAt && (Date.now()-lastRemoteAt)<20000){ /* keep */ }
+      else setDot(false);
       dirty=true;
       setTimeout(function(){ if(dirty) push(); }, 2500);
       return false;
@@ -278,25 +292,26 @@
     if(pullTimer) clearInterval(pullTimer);
     pullTimer=setInterval(function(){
       if(document.visibilityState!=='visible') return;
-      if(writing || busy || dirty || inGrace()) return;
+      if(dirty || writing || inGrace()) return;
       pull(false);
-    }, 12000);
+    }, 8000);
   }
 
   saveProfile = function(){ schedulePush(); };
-  startFirebaseSync = function(){ try{ syncStatus='online'; updateSyncDot(); }catch(e){} };
+  startFirebaseSync = function(){ try{ syncStatus='online'; updateSyncDot(); setDot(true); }catch(e){} };
 
   document.addEventListener('click', function(e){
-    var t=e.target.closest('[data-act]'); if(!t) return;
+    var t=e.target.closest('[data-act]');
+    if(!t) return;
     var a=t.getAttribute('data-act');
-    if(a==='force-sync'){ e.preventDefault(); e.stopPropagation(); fullSync(true); }
-    if(a==='hard-sync'){ e.preventDefault(); e.stopPropagation(); hardReset(); }
     if(a==='push-cloud'){ e.preventDefault(); e.stopPropagation(); dirty=true; localEditUntil=Date.now()+20000; push().then(function(ok){ toast(ok?('✓ '+lastSummary):'ارسال نشد'); }); }
+    if(a==='pull-cloud' || a==='sync-cloud'){ e.preventDefault(); e.stopPropagation(); fullSync(true); }
+    if(a==='hard-sync'){ e.preventDefault(); e.stopPropagation(); hardReset(); }
     if(a==='set-cloud'){
       e.preventDefault(); e.stopPropagation();
-      var u=prompt('آدرس Cloudflare:', getCloudBase());
-      if(u===null) return;
-      u=(u||'').trim().replace(/\/+$/,'');
+      var u=prompt('آدرس Worker:', getCloudBase());
+      if(!u) return;
+      u=String(u).trim().replace(/\/+$/,'');
       if(u.indexOf('https://')!==0){ toast('باید https باشد'); return; }
       try{ localStorage.setItem(CFG_KEY,u); }catch(e){}
       window.CLOUD_API=u; hardReset();
@@ -322,7 +337,11 @@
       tries++;
       if(typeof S==='undefined'){ if(tries<60) return setTimeout(wait,100); }
       dirty=false; localEditUntil=0;
-      pull(false).then(function(){ dirty=false; });
+      try{
+        var hb=(getCloudBase()||DEFAULT_CLOUD)+'/health?t='+Date.now();
+        fetch(hb,{cache:'no-store'}).then(function(r){ if(r.ok) setDot(true); }).catch(function(){});
+      }catch(e){}
+      pull(false).then(function(ok){ dirty=false; if(ok) setDot(true); });
       startForegroundPull();
       document.addEventListener('visibilitychange', function(){
         if(document.visibilityState==='visible'){
@@ -344,5 +363,5 @@
     online:function(){return online},
     summary:function(){return lastSummary}
   };
-  console.log('sync-fix v22: deletes stick (no pickLonger on lists)');
+  console.log('sync-fix v23: health probe + soft offline');
 })();
